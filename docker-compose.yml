@@ -1,0 +1,40 @@
+# docker-compose.yml — local development
+#
+# Run:    docker compose up --build
+# Stop:   docker compose down
+# Logs:   docker compose logs -f
+# Shell:  docker compose exec maplead bash
+
+services:
+  maplead:
+    build: .
+    container_name: maplead
+    ports:
+      - "8501:8501"
+    environment:
+      # Pick a backend: playwright | outscraper | serpapi
+      - SCRAPER_BACKEND=${SCRAPER_BACKEND:-playwright}
+
+      # Outscraper — get a key at https://app.outscraper.com/profile
+      - OUTSCRAPER_API_KEY=${OUTSCRAPER_API_KEY:-}
+
+      # SerpApi — get a key at https://serpapi.com/manage-api-key
+      - SERPAPI_API_KEY=${SERPAPI_API_KEY:-}
+
+      # Locale (en, de, fr, es, it, pt-BR, ja, ko, zh-CN, ar)
+      - MAPLEAD_LOCALE=${MAPLEAD_LOCALE:-en}
+
+      # Pass through to Playwright if needed
+      - PLAYWRIGHT_BROWSERS_PATH=/home/maplead/.cache/ms-playwright
+    volumes:
+      # Persist downloaded XLSX/CSV outside the container
+      - ./output:/app/output
+
+    restart: unless-stopped
+
+    # Resource limits — Chromium is hungry
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "1.5"

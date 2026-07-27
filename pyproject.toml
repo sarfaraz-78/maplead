@@ -1,0 +1,25 @@
+[project]
+name = "maplead"
+version = "1.0.0"
+description = "Turn Google Maps searches into Excel-ready business leads."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+authors = [{ name = "MapLead Contributors" }]
+keywords = ["google-maps", "scraper", "streamlit", "lead-generation", "playwright"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["E501"]  # line length handled by formatter
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-v --tb=short"
+
+[tool.setuptools]
+py-modules = ["app", "scraper", "utils", "api_backends"]

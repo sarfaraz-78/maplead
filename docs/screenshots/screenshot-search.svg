@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 750" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
+  <!-- Background -->
+  <rect width="1200" height="750" fill="#F8FAFC"/>
+
+  <!-- Streamlit top bar -->
+  <rect x="0" y="0" width="1200" height="48" fill="#FFFFFF"/>
+  <line x1="0" y1="48" x2="1200" y2="48" stroke="#E2E8F0" stroke-width="1"/>
+  <text x="20" y="30" font-size="14" font-weight="600" fill="#0F172A">🗺️ MapLead</text>
+
+  <!-- Sidebar -->
+  <rect x="0" y="48" width="280" height="702" fill="#FFFFFF"/>
+  <line x1="280" y1="48" x2="280" y2="750" stroke="#E2E8F0" stroke-width="1"/>
+
+  <text x="20" y="90" font-size="14" font-weight="700" fill="#0F172A">⚙️ Settings</text>
+
+  <!-- Backend selector -->
+  <text x="20" y="125" font-size="12" font-weight="600" fill="#475569">Scraper backend</text>
+  <rect x="20" y="135" width="240" height="36" rx="6" fill="#FFFFFF" stroke="#CBD5E1"/>
+  <text x="32" y="158" font-size="13" fill="#0F172A">🆓 Playwright — free, self-hosted</text>
+  <text x="245" y="158" font-size="12" fill="#94A3B8">▼</text>
+
+  <!-- Headless toggle -->
+  <rect x="20" y="190" width="240" height="36" rx="6" fill="#F1F5F9"/>
+  <circle cx="232" cy="208" r="9" fill="#2563EB"/>
+  <text x="34" y="213" font-size="13" fill="#0F172A">Headless mode</text>
+
+  <!-- Locale selector -->
+  <text x="20" y="255" font-size="12" font-weight="600" fill="#475569">Search region (locale)</text>
+  <rect x="20" y="265" width="240" height="36" rx="6" fill="#FFFFFF" stroke="#CBD5E1"/>
+  <text x="32" y="288" font-size="13" fill="#0F172A">English (US)</text>
+
+  <line x1="20" y1="330" x2="260" y2="330" stroke="#E2E8F0"/>
+  <text x="20" y="360" font-size="14" font-weight="700" fill="#0F172A">📚 Tips</text>
+  <text x="20" y="385" font-size="12" fill="#475569">• Be specific in your search term</text>
+  <text x="20" y="405" font-size="12" fill="#475569">• Turn off headless if you hit</text>
+  <text x="32" y="422" font-size="12" fill="#475569">CAPTCHAs</text>
+
+  <!-- Main content -->
+  <!-- Hero card -->
+  <rect x="310" y="68" width="870" height="110" rx="12" fill="url(#hero-grad)"/>
+  <defs>
+    <linearGradient id="hero-grad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#2563EB"/>
+      <stop offset="100%" stop-color="#7C3AED"/>
+    </linearGradient>
+  </defs>
+  <text x="335" y="115" font-size="34" font-weight="800" fill="#FFFFFF">🗺️ MapLead</text>
+  <text x="335" y="148" font-size="15" fill="#FFFFFF" opacity="0.92">Turn Google Maps searches into Excel-ready business leads</text>
+
+  <!-- Search row -->
+  <text x="310" y="210" font-size="14" font-weight="600" fill="#0F172A">🔍 Search term</text>
+  <rect x="310" y="220" width="610" height="44" rx="6" fill="#FFFFFF" stroke="#CBD5E1"/>
+  <text x="325" y="247" font-size="14" fill="#94A3B8">e.g. Coffee Shops in Brooklyn, NY</text>
+
+  <text x="940" y="210" font-size="14" font-weight="600" fill="#0F172A">Max results</text>
+  <rect x="940" y="220" width="240" height="44" rx="6" fill="#FFFFFF" stroke="#CBD5E1"/>
+  <text x="955" y="247" font-size="14" fill="#0F172A">50</text>
+
+  <!-- Filters expander -->
+  <rect x="310" y="285" width="870" height="48" rx="6" fill="#F1F5F9"/>
+  <text x="328" y="313" font-size="14" font-weight="600" fill="#475569">🎯 Filters (applied after scraping)</text>
+  <text x="1145" y="313" font-size="14" fill="#475569">▶</text>
+
+  <!-- Run button -->
+  <rect x="310" y="350" width="870" height="50" rx="8" fill="#2563EB"/>
+  <text x="745" y="382" text-anchor="middle" font-size="16" font-weight="700" fill="#FFFFFF">🚀 Get Leads</text>
+
+  <!-- Footer hint -->
+  <text x="745" y="730" text-anchor="middle" font-size="12" fill="#94A3B8">Use responsibly and respect Google's Terms of Service</text>
+</svg>
