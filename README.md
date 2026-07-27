@@ -193,6 +193,25 @@ CI runs on every push / PR via [.github/workflows/test.yml](.github/workflows/te
 - ✅ Ruff lint
 - ✅ Docker build sanity check
 
+### One-time setup: enable the CI workflow
+
+The initial push was made with a GitHub OAuth token that didn't have the `workflow` scope, so `.github/workflows/test.yml` was excluded from the first commit. After the first clone:
+
+```bash
+# Option A — re-authenticate gh CLI with workflow scope
+gh auth refresh --scopes workflow
+
+# Option B — set the token manually
+git remote set-url origin https://<TOKEN_WITH_WORKFLOW_SCOPE>@github.com/sarfaraz-78/maplead.git
+
+# Then push the workflow
+git add .github/
+git commit -m "ci: enable GitHub Actions workflow"
+git push
+```
+
+The file lives at `.github/workflows/test.yml` in your working tree and is ready to go.
+
 ---
 
 ## ⚖️ Legal & ethical use
