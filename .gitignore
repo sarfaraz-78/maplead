@@ -33,3 +33,5 @@ output/
 # Env / secrets
 .env
 .env.local
+.github/workflows/
+*.yml.tmp
