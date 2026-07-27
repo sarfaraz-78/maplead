@@ -33,5 +33,14 @@ output/
 # Env / secrets
 .env
 .env.local
+
+# Note: .github/workflows/ is intentionally NOT ignored at the repo level —
+# the CI workflow file lives there. (The original push was blocked by a
+# GitHub OAuth token missing the `workflow` scope; once the repo owner
+# grants that scope, the file will be pushed on the next `git add .github/`.)
+
+# GH CLI scratch files
+payload.json
+
 .github/workflows/
 *.yml.tmp
