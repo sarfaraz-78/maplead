@@ -431,10 +431,47 @@ if run:
         if error:
             st.session_state.error = error
             st.error(f"❌ Scraping failed: {error}")
-            st.info(
-                "💡 Try: toggle **off** headless mode, reduce **max results**, "
-                "or wait a minute — Google may have rate-limited your IP."
-            )
+            # Backend-specific suggestions
+            if backend_name == "justdial":
+                st.info(
+                    "💡 JustDial tips:\n"
+                    "- Query must include a city: `restaurants in Mumbai`\n"
+                    "- Use JustDial's exact city names (e.g. *Bengaluru*, not *Bangalore*)\n"
+                    "- If a category returns 0 results, try a broader category\n"
+                    "- Check your Apify credit balance at console.apify.com/billing",
+                    icon="🇮🇳",
+                )
+            elif backend_name == "indiamart":
+                st.info(
+                    "💡 IndiaMART tips:\n"
+                    "- Use B2B product terms: `LED lights`, `cotton fabric`, `stainless steel pipes`\n"
+                    "- Add a location for local suppliers: `stainless steel pipes in Mumbai`\n"
+                    "- Avoid consumer terms like *restaurants* or *salons*\n"
+                    "- Check your Apify credit balance at console.apify.com/billing",
+                    icon="🇮🇳",
+                )
+            elif backend_name == "outscraper":
+                st.info(
+                    "💡 Try: reduce **max results**, or wait a minute — "
+                    "Google may have rate-limited your IP.",
+                    icon="💎",
+                )
+            elif backend_name == "serpapi":
+                st.info(
+                    "💡 SerpApi tip: reduce **max results** or check your quota at serpapi.com/dashboard",
+                    icon="💎",
+                )
+            elif backend_name in ("yelp", "foursquare"):
+                st.info(
+                    "💡 Make sure the query includes a **location**: "
+                    'e.g. `plumbers in Brooklyn` or `cafes in Mumbai`',
+                    icon="⚠️",
+                )
+            else:
+                st.info(
+                    "💡 Try: toggle **off** headless mode, reduce **max results**, "
+                    "or wait a minute — Google may have rate-limited your IP."
+                )
         else:
             st.session_state.results = biz_list
             st.session_state.run_meta = {
@@ -548,10 +585,46 @@ if st.session_state.results and st.session_state.results.business_list:
         st.info("No leads match your filters. Loosen the filters and try again.")
 
 elif st.session_state.results is not None and not st.session_state.results.business_list:
-    st.warning(
-        "Scrape ran successfully but returned 0 results. "
-        "Try a more specific search term or turn off headless mode."
-    )
+    # Backend-specific empty-result hints
+    if backend_name == "justdial":
+        st.warning(
+            "Scrape ran successfully but returned **0 results**.\n\n"
+            "**Common reasons for JustDial:**\n"
+            "- That category doesn't exist in that city on JustDial\n"
+            "- City name doesn't match JustDial's exact format "
+            "(try *Bengaluru* instead of *Bangalore*, *Gurugram* instead of *Gurgaon*)\n"
+            "- JustDial blocks datacenter IPs sometimes — the actor returns empty instead of erroring\n\n"
+            "**Try:**\n"
+            "- A different city: `dentists in Mumbai`\n"
+            "- A different category: `restaurants` instead of *multi-cuisine restaurants*\n"
+            "- Verify manually at [justdial.com](https://www.justdial.com) that listings exist",
+            icon="🇮🇳",
+        )
+    elif backend_name == "indiamart":
+        st.warning(
+            "Scrape ran successfully but returned **0 results**.\n\n"
+            "**Common reasons for IndiaMART:**\n"
+            "- No suppliers match that exact product term\n"
+            "- The product term is too niche — try a broader category\n"
+            "- IndiaMART is region-scoped; try with a state name\n\n"
+            "**Try:**\n"
+            "- `LED lights` instead of *RGB LED strip lights 5m waterproof*\n"
+            "- `cotton fabric` instead of *combed cotton gsm 200*\n"
+            "- `stainless steel pipes in Maharashtra` (state, not city)",
+            icon="🇮🇳",
+        )
+    elif backend_name == "osm":
+        st.warning(
+            "Scrape ran successfully but returned **0 results**.\n\n"
+            "OSM (OpenStreetMap) is community-edited and has **thin coverage in India**. "
+            "Try **Outscraper**, **JustDial**, or **IndiaMART** for India-specific data.",
+            icon="🆓",
+        )
+    else:
+        st.warning(
+            "Scrape ran successfully but returned 0 results. "
+            "Try a more specific search term or turn off headless mode."
+        )
 
 
 # ---------------------------------------------------------------------------
