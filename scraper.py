@@ -44,9 +44,26 @@ class Business:
     latitude: Optional[float] = None
     longitude: Optional[float] = None
     google_maps_url: Optional[str] = None
+    is_closed: Optional[bool] = None  # True = permanently closed; None = unknown
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+    @property
+    def completeness_score(self) -> int:
+        """0-4: how many key fields are populated (name counts, plus phone/website/rating/address)."""
+        score = 0
+        if self.name:
+            score += 1
+        if self.phone_number:
+            score += 1
+        if self.website:
+            score += 1
+        if self.reviews_average is not None:
+            score += 1
+        if self.address:
+            score += 1
+        return min(score, 4)
 
 
 @dataclass
@@ -287,8 +304,16 @@ async def _dismiss_consent(page: Page) -> None:
         logger.debug("Consent dismissal skipped: %s", exc)
 
 
-async def humanize_scroll(page: Page, target: int, max_rounds: int = 60) -> int:
+async def humanize_scroll(page: Page, target: int, max_rounds: int = 80) -> int:
     """Scroll the listings panel in a human-like pattern until ``target`` items are loaded.
+
+    Google Maps results live in a scrollable sidebar — if the mouse isn't hovering over
+    that panel, ``mouse.wheel`` scrolls the map (or nothing). So we:
+
+    1. Locate the actual scrollable container
+    2. Hover the cursor over it
+    3. Scroll that container directly via JS (most reliable)
+    4. Fall back to mouse.wheel + keyboard if JS scroll fails
 
     Returns the actual number of listing links currently on the page.
     """
@@ -296,23 +321,99 @@ async def humanize_scroll(page: Page, target: int, max_rounds: int = 60) -> int:
     previous_count = 0
     no_change_rounds = 0
 
+    # Try to find the scrollable panel container
+    # Google Maps uses several possible selectors across redesigns
+    panel_selectors = [
+        'div[role="feed"]',                              # current design (2024+)
+        'div[aria-label*="Results"]',
+        'div.m6QErb.DxyBCb',                             # legacy class
+        'div.m6QErb[aria-label]',                        # generic scrollable results
+        'div[aria-label*="results" i]',
+        'div.section-scrollbox',                         # legacy
+        'div[role="region"]',
+    ]
+
+    panel_handle = None
+    for sel in panel_selectors:
+        try:
+            loc = page.locator(sel).first
+            if await loc.count() > 0:
+                # Make sure it's actually scrollable (scrollHeight > clientHeight)
+                is_scrollable = await loc.evaluate(
+                    """el => el.scrollHeight > el.clientHeight + 10"""
+                )
+                if is_scrollable:
+                    panel_handle = loc
+                    logger.info("Using panel selector: %s", sel)
+                    break
+        except Exception:  # noqa: BLE001
+            continue
+
+    # Always hover the cursor over the panel before wheel-scrolling
+    if panel_handle is not None:
+        try:
+            await panel_handle.hover()
+            await page.wait_for_timeout(200)
+        except Exception:  # noqa: BLE001
+            pass
+    else:
+        # Fallback: hover the first listing link
+        try:
+            await page.locator(listings_selector).first.hover()
+            await page.wait_for_timeout(200)
+        except Exception:  # noqa: BLE001
+            pass
+
     for _ in range(max_rounds):
         current = await page.locator(listings_selector).count()
 
         if current >= target:
+            logger.info("Reached target: %d listings", current)
             return current
 
         if current == previous_count:
             no_change_rounds += 1
-            if no_change_rounds >= 4:
+            if no_change_rounds >= 5:
+                logger.info("No more new listings after %d rounds (%d total)", no_change_rounds, current)
                 return current
         else:
             no_change_rounds = 0
+            logger.debug("Loaded %d listings so far", current)
 
-        # Humanised scrolling: short bursts of small wheel events
-        for _ in range(random.randint(3, 6)):
-            await page.mouse.wheel(0, random.randint(600, 1200))
-            await page.wait_for_timeout(random.randint(120, 280))
+        # Strategy 1: scroll the panel container directly via JS (most reliable)
+        scrolled = False
+        if panel_handle is not None:
+            try:
+                await panel_handle.evaluate(
+                    """el => { el.scrollBy({ top: 800, behavior: 'instant' }); }"""
+                )
+                scrolled = True
+            except Exception:  # noqa: BLE001
+                pass
+
+        # Strategy 2: mouse.wheel if JS scroll didn't apply
+        if not scrolled:
+            try:
+                # Re-hover in case the cursor drifted
+                if panel_handle is not None:
+                    await panel_handle.hover()
+                # Multiple small wheel events (more human-like, registers more reliably)
+                for _ in range(random.randint(4, 7)):
+                    await page.mouse.wheel(0, random.randint(400, 900))
+                    await page.wait_for_timeout(random.randint(100, 220))
+            except Exception:  # noqa: BLE001
+                pass
+
+        # Strategy 3: keyboard End/PageDown on the panel (works in some Google Maps versions)
+        if panel_handle is not None:
+            try:
+                await panel_handle.focus()
+                await page.keyboard.press("End")
+                await page.wait_for_timeout(150)
+            except Exception:  # noqa: BLE001
+                pass
+
+        await page.wait_for_timeout(random.randint(700, 1300))
 
         previous_count = current
 
@@ -432,8 +533,36 @@ async def scrape_businesses(
             await page.wait_for_timeout(random.randint(1200, 2200))
 
             # ---- 2. Search ---------------------------------------------------
-            search_input = page.locator(SELECTORS["search_input"][0])
-            await search_input.fill(search_term)
+            # Try each known search-input selector until one works
+            filled = False
+            for selector in SELECTORS["search_input"]:
+                try:
+                    if await page.locator(selector).count() > 0:
+                        await page.locator(selector).first.fill(search_term)
+                        filled = True
+                        break
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("Search selector %s failed: %s", selector, exc)
+
+            if not filled:
+                # Fallback: click the "Search" toolbar button to reveal the input
+                try:
+                    await page.locator('button[aria-label="Search"]').first.click()
+                    await page.wait_for_timeout(800)
+                    for selector in SELECTORS["search_input"]:
+                        if await page.locator(selector).count() > 0:
+                            await page.locator(selector).first.fill(search_term)
+                            filled = True
+                            break
+                except Exception:  # noqa: BLE001
+                    pass
+
+            if not filled:
+                raise RuntimeError(
+                    "Could not find the Google Maps search input. "
+                    "Google may have redesigned the page — check the SELECTORS in scraper.py."
+                )
+
             await page.wait_for_timeout(random.randint(800, 1600))
             await page.keyboard.press("Enter")
             await page.wait_for_timeout(random.randint(3500, 5500))

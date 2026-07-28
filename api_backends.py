@@ -274,6 +274,578 @@ class PlaywrightBackend:
 
 
 # ---------------------------------------------------------------------------
+# OpenStreetMap (via Overpass + Nominatim) — 100% free, no API key, no signup
+# ---------------------------------------------------------------------------
+
+
+# Map of common business keywords → OSM amenity/shop tags
+# https://wiki.openstreetmap.org/wiki/Key:amenity
+_OSM_TAG_MAP: dict[str, list[tuple[str, str]]] = {
+    # keyword → list of (key, value) tag filters
+    "restaurant": [("amenity", "restaurant")],
+    "restaurants": [("amenity", "restaurant")],
+    "cafe": [("amenity", "cafe")],
+    "cafes": [("amenity", "cafe")],
+    "coffee": [("amenity", "cafe")],
+    "coffee shop": [("amenity", "cafe")],
+    "coffee shops": [("amenity", "cafe")],
+    "bar": [("amenity", "bar")],
+    "bars": [("amenity", "bar")],
+    "pub": [("amenity", "pub")],
+    "pubs": [("amenity", "pub")],
+    "hotel": [("tourism", "hotel")],
+    "hotels": [("tourism", "hotel")],
+    "pharmacy": [("amenity", "pharmacy")],
+    "pharmacies": [("amenity", "pharmacy")],
+    "hospital": [("amenity", "hospital")],
+    "hospitals": [("amenity", "hospital")],
+    "clinic": [("amenity", "clinic")],
+    "doctor": [("amenity", "doctors")],
+    "dentist": [("amenity", "dentist")],
+    "bank": [("amenity", "bank")],
+    "banks": [("amenity", "bank")],
+    "atm": [("amenity", "atm")],
+    "atms": [("amenity", "atm")],
+    "supermarket": [("shop", "supermarket")],
+    "supermarkets": [("shop", "supermarket")],
+    "grocery": [("shop", "supermarket"), ("shop", "convenience")],
+    "bakery": [("shop", "bakery")],
+    "bakeries": [("shop", "bakery")],
+    "butcher": [("shop", "butcher")],
+    "florist": [("shop", "florist")],
+    "florists": [("shop", "florist")],
+    "bookstore": [("shop", "books")],
+    "bookstores": [("shop", "books")],
+    "clothing": [("shop", "clothes")],
+    "shoe": [("shop", "shoes")],
+    "shoes": [("shop", "shoes")],
+    "jewelry": [("shop", "jewelry")],
+    "jewellery": [("shop", "jewelry")],
+    "hairdresser": [("shop", "hairdresser")],
+    "salon": [("shop", "hairdresser")],
+    "beauty": [("shop", "beauty")],
+    "car repair": [("shop", "car_repair")],
+    "auto repair": [("shop", "car_repair")],
+    "gas station": [("amenity", "fuel")],
+    "petrol": [("amenity", "fuel")],
+    "petrol pump": [("amenity", "fuel")],
+    "parking": [("amenity", "parking")],
+    "school": [("amenity", "school")],
+    "schools": [("amenity", "school")],
+    "university": [("amenity", "university")],
+    "gym": [("leisure", "fitness_centre")],
+    "fitness": [("leisure", "fitness_centre")],
+    "museum": [("tourism", "museum")],
+    "museums": [("tourism", "museum")],
+    "library": [("amenity", "library")],
+    "libraries": [("amenity", "library")],
+    "church": [("amenity", "place_of_worship")],
+    "plumber": [("craft", "plumber")],
+    "plumbers": [("craft", "plumber")],
+    "electrician": [("craft", "electrician")],
+    "lawyer": [("office", "lawyer")],
+    "accountant": [("office", "accountant")],
+    "real estate": [("office", "estate_agent")],
+    # ──────── India-specific categories ────────
+    "chai": [("amenity", "cafe")],
+    "tea stall": [("amenity", "cafe")],
+    "tea shop": [("amenity", "cafe")],
+    "dhaba": [("amenity", "restaurant")],
+    "kirana": [("shop", "convenience")],
+    "kirana store": [("shop", "convenience")],
+    "general store": [("shop", "convenience")],
+    "medical": [("amenity", "pharmacy")],
+    "medical store": [("amenity", "pharmacy")],
+    "chemist": [("amenity", "pharmacy")],
+    "provision store": [("shop", "convenience")],
+    "sweet shop": [("shop", "confectionery")],
+    "sweets": [("shop", "confectionery")],
+    "mithai": [("shop", "confectionery")],
+    "juice": [("amenity", "cafe")],
+    "juice center": [("amenity", "cafe")],
+    "tiffin": [("amenity", "restaurant")],
+    "tiffin center": [("amenity", "restaurant")],
+    "veg restaurant": [("amenity", "restaurant")],
+    "non veg": [("amenity", "restaurant")],
+    "fast food": [("amenity", "fast_food")],
+    "street food": [("amenity", "fast_food")],
+    "ice cream": [("amenity", "ice_cream")],
+    "ice cream parlor": [("amenity", "ice_cream")],
+    "auto": [("amenity", "taxi")],
+    "auto stand": [("amenity", "taxi")],
+    "rickshaw": [("amenity", "taxi")],
+    "car rental": [("amenity", "car_rental")],
+    "car hire": [("amenity", "car_rental")],
+    "travel": [("office", "travel_agent")],
+    "travel agent": [("office", "travel_agent")],
+    "courier": [("amenity", "post_office")],
+    "xerox": [("shop", "stationery")],
+    "photocopy": [("shop", "stationery")],
+    "cyber cafe": [("amenity", "internet_cafe")],
+    "mobile": [("shop", "mobile_phone")],
+    "mobile shop": [("shop", "mobile_phone")],
+    "mobile repair": [("shop", "mobile_phone")],
+    "saree": [("shop", "clothes")],
+    "saree shop": [("shop", "clothes")],
+    "tailor": [("shop", "tailor")],
+    "boutique": [("shop", "clothes")],
+    "jewellers": [("shop", "jewelry")],
+    "optician": [("shop", "optician")],
+    "opticals": [("shop", "optician")],
+    "watch": [("shop", "watches")],
+    "watch repair": [("shop", "watches")],
+    "electrical": [("shop", "electrical")],
+    "hardware": [("shop", "hardware")],
+    "paint": [("shop", "paint")],
+    "tiles": [("shop", "tiles")],
+    "tyre": [("shop", "tyres")],
+    "tire": [("shop", "tyres")],
+    "car wash": [("amenity", "car_wash")],
+    "temple": [("amenity", "place_of_worship")],
+    "mosque": [("amenity", "place_of_worship")],
+    "masjid": [("amenity", "place_of_worship")],
+    "gurudwara": [("amenity", "place_of_worship")],
+    "coaching": [("amenity", "school")],
+    "tuition": [("amenity", "school")],
+    "training institute": [("amenity", "school")],
+    "it company": [("office", "it")],
+    "software": [("office", "it")],
+    "it park": [("office", "it")],
+    "coworking": [("office", "coworking")],
+    "co-working": [("office", "coworking")],
+    "mall": [("shop", "mall")],
+    "shopping mall": [("shop", "mall")],
+}
+
+
+class OSMBackend:
+    """OpenStreetMap via Nominatim + Overpass API.
+
+    ✅ 100% free — no API key, no signup, no browser, no CAPTCHAs
+    ✅ Worldwide coverage
+    ⚠️  No ratings / reviews (OSM doesn't have them)
+    ⚠️  Smaller dataset than Google Maps (~80% coverage for businesses in urban areas)
+    ⚠️  Phone/website data is hit-or-miss (depends on volunteer mappers)
+
+    Usage limits (courtesy, not hard limits):
+        Nominatim: 1 request/second
+        Overpass:  ~10 GB/day per IP
+
+    Best for: "give me a list of <business type> in <city>" where you need
+    name, address, lat/lon — not Google-quality reviews data.
+    """
+
+    name = "OpenStreetMap (free, no key)"
+    requires_api_key = False
+
+    NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
+    OVERPASS_URLS = [
+        "https://overpass-api.de/api/interpreter",
+        "https://overpass.kumi.systems/api/interpreter",
+        "https://overpass.osm.ch/api/interpreter",
+    ]
+    DEFAULT_TIMEOUT = 60.0
+
+    def __init__(self) -> None:
+        # OSM requires a User-Agent per their usage policy
+        self._headers = {
+            "User-Agent": "MapLead/1.0 (https://github.com/sabsar42/Google-Map-Scrapper-Streamlit-Web)",
+        }
+
+    async def scrape(
+        self,
+        search_term: str,
+        total: int = 30,
+        progress_callback: Optional[ProgressCallback] = None,
+        **kwargs: Any,
+    ) -> BusinessList:
+        import urllib.parse
+
+        # Split "coffee shops in Brooklyn" → category="coffee shops", location="Brooklyn"
+        category, location = self._parse_query(search_term)
+        if not location:
+            raise ValueError(
+                "OpenStreetMap backend requires a location. "
+                'Use a query like "coffee shops in Brooklyn" — not just "coffee".'
+            )
+
+        logger.info("OSM query: category=%r location=%r", category, location)
+
+        async with httpx.AsyncClient(
+            timeout=self.DEFAULT_TIMEOUT, headers=self._headers
+        ) as client:
+            # 1. Geocode the location → bounding box
+            bbox = await self._geocode(client, location)
+            if bbox is None:
+                raise RuntimeError(f"Could not geocode location: {location!r}")
+
+            # 2. Resolve category → OSM tags
+            tags = self._resolve_category(category)
+            if not tags:
+                # Fallback: free-text name search within bbox
+                results = await self._overpass_name_search(
+                    client, bbox, category, total
+                )
+            else:
+                # 3. Query Overpass for matching businesses
+                results = await self._overpass_tag_search(client, bbox, tags, total)
+
+        business_list = BusinessList()
+        for idx, item in enumerate(results):
+            business_list.add(self._parse_osm(item))
+            if progress_callback:
+                await progress_callback(idx + 1, len(results))
+
+        logger.info("OSM returned %d results", len(business_list))
+        return business_list
+
+    # ------------------------------------------------------------------ helpers
+
+    @staticmethod
+    def _parse_query(query: str) -> tuple[str, str]:
+        """Split 'coffee shops in Brooklyn, NY' → ('coffee shops', 'Brooklyn, NY')."""
+        query = query.strip()
+        for sep in (" in ", " near ", " around "):
+            if sep in query.lower():
+                idx = query.lower().find(sep)
+                category = query[:idx].strip()
+                location = query[idx + len(sep):].strip()
+                return category, location
+        # No location found
+        return query, ""
+
+    async def _geocode(
+        self, client: httpx.AsyncClient, location: str
+    ) -> Optional[tuple[float, float, float, float]]:
+        """Return (south, west, north, east) bounding box for a place name."""
+        params = {
+            "q": location,
+            "format": "json",
+            "limit": 1,
+            "addressdetails": 0,
+        }
+        try:
+            r = await client.get(self.NOMINATIM_URL, params=params)
+            r.raise_for_status()
+            data = r.json()
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Nominatim geocode failed: %s", exc)
+            return None
+
+        if not data:
+            return None
+
+        bbox = data[0].get("boundingbox")
+        if not bbox or len(bbox) != 4:
+            return None
+        # Nominatim returns [south, north, west, east] as strings
+        return tuple(float(x) for x in bbox)  # type: ignore[return-value]
+
+    @staticmethod
+    def _resolve_category(category: str) -> list[tuple[str, str]]:
+        """Map a free-text category to OSM tag filters."""
+        cat = category.lower().strip()
+
+        # Exact match
+        if cat in _OSM_TAG_MAP:
+            return _OSM_TAG_MAP[cat]
+
+        # Substring match (longest first)
+        for key in sorted(_OSM_TAG_MAP.keys(), key=len, reverse=True):
+            if key in cat:
+                return _OSM_TAG_MAP[key]
+
+        return []
+
+    async def _overpass_tag_search(
+        self,
+        client: httpx.AsyncClient,
+        bbox: tuple[float, float, float, float],
+        tags: list[tuple[str, str]],
+        limit: int,
+    ) -> list[dict]:
+        """Query Overpass for nodes + ways + relations matching any of the tag pairs."""
+        south, north, west, east = bbox
+        bbox_str = f"{south},{west},{north},{east}"
+
+        # Build union of tag queries: node["amenity"="cafe"](bbox); way["amenity"="cafe"](bbox); ...
+        type_filters = []
+        for key, value in tags:
+            for osm_type in ("node", "way", "relation"):
+                type_filters.append(
+                    f'{osm_type}["{key}"="{value}"]({bbox_str});'
+                )
+
+        query = f"""
+[out:json][timeout:25];
+(
+  {chr(10).join("  " + f for f in type_filters)}
+);
+out center tags {limit};
+"""
+        return await self._run_overpass(client, query)
+
+    async def _overpass_name_search(
+        self,
+        client: httpx.AsyncClient,
+        bbox: tuple[float, float, float, float],
+        name: str,
+        limit: int,
+    ) -> list[dict]:
+        """Fallback: search by name substring within bbox."""
+        south, north, west, east = bbox
+        bbox_str = f"{south},{west},{north},{east}"
+        query = f"""
+[out:json][timeout:25];
+(
+  node["name"~"{name}", i]({bbox_str});
+  way["name"~"{name}", i]({bbox_str});
+  relation["name"~"{name}", i]({bbox_str});
+);
+out center tags {limit};
+"""
+        return await self._run_overpass(client, query)
+
+    async def _run_overpass(
+        self, client: httpx.AsyncClient, query: str
+    ) -> list[dict]:
+        """POST the query to Overpass with multi-endpoint fallback."""
+        last_error: Optional[Exception] = None
+        for url in self.OVERPASS_URLS:
+            try:
+                r = await client.post(url, data={"data": query})
+                if r.status_code == 429:
+                    logger.warning("Overpass rate-limited on %s, trying next", url)
+                    await asyncio.sleep(1)
+                    continue
+                r.raise_for_status()
+                data = r.json()
+                return data.get("elements", [])
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Overpass %s failed: %s", url, exc)
+                last_error = exc
+                continue
+        if last_error:
+            raise last_error
+        return []
+
+    @staticmethod
+    def _parse_osm(item: dict) -> Business:
+        tags = item.get("tags") or {}
+        # For ways/relations, "center" holds lat/lon; for nodes, "lat"/"lon"
+        lat = item.get("lat") or (item.get("center") or {}).get("lat")
+        lon = item.get("lon") or (item.get("center") or {}).get("lon")
+
+        # Build address from addr:* tags
+        addr_parts = [
+            tags.get("addr:housenumber"),
+            tags.get("addr:street"),
+            tags.get("addr:suburb"),
+            tags.get("addr:city"),
+            tags.get("addr:state"),
+            tags.get("addr:postcode"),
+            tags.get("addr:country"),
+        ]
+        address = ", ".join(p for p in addr_parts if p) or None
+
+        # OSM has no ratings/reviews
+        return Business(
+            name=tags.get("name") or tags.get("name:en"),
+            address=address,
+            website=tags.get("website") or tags.get("contact:website"),
+            phone_number=tags.get("phone") or tags.get("contact:phone"),
+            category=tags.get("amenity") or tags.get("shop") or tags.get("tourism") or tags.get("craft") or tags.get("office") or tags.get("leisure"),
+            reviews_average=None,
+            reviews_count=None,
+            latitude=_safe_float(lat),
+            longitude=_safe_float(lon),
+            google_maps_url=None,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Yelp Fusion
+# ---------------------------------------------------------------------------
+
+
+class YelpBackend:
+    """Yelp Fusion API backend.
+
+    Free tier: 5,000 API calls/day = ~150,000 businesses/month.
+    No credit card needed for free tier. Best cost-vs-data ratio.
+
+    Sign up:  https://www.yelp.com/developers/v3/manage_app
+    Docs:     https://www.yelp.com/developers/documentation/v3/business_search
+
+    Returns: name, address, phone, Yelp URL, rating, review_count,
+             category, lat/lon, price tier.
+
+    Limitations:
+    - Only returns businesses that have a Yelp listing
+    - Max 50 results per page, 1000 per query (pagination via offset)
+    - ``url`` field is the Yelp page, not the business's own website
+    """
+
+    name = "Yelp Fusion"
+    requires_api_key = True
+
+    BASE_URL = "https://api.yelp.com/v3/businesses/search"
+    PER_PAGE = 50  # Yelp's max per page
+    MAX_OFFSET = 1000  # Yelp's max offset (50 * 20 pages)
+    DEFAULT_TIMEOUT = 30.0
+
+    def __init__(self, api_key: Optional[str] = None) -> None:
+        self.api_key = api_key or os.environ.get("YELP_API_KEY", "")
+        if not self.api_key:
+            raise ValueError(
+                "Yelp API key missing. "
+                "Set YELP_API_KEY or pass api_key=...  "
+                "Get a free key at https://www.yelp.com/developers/v3/manage_app"
+            )
+
+    async def scrape(
+        self,
+        search_term: str,
+        total: int = 30,
+        progress_callback: Optional[ProgressCallback] = None,
+        **kwargs: Any,
+    ) -> BusinessList:
+        term, location = self._parse_query(search_term)
+        if not location:
+            raise ValueError(
+                "Yelp backend needs a location. "
+                'Use a query like "plumbers in Brooklyn" — not just "plumbers".'
+            )
+
+        logger.info("Yelp search: term=%r location=%r total=%d", term, location, total)
+
+        headers = {"Authorization": f"Bearer {self.api_key}"}
+        business_list = BusinessList()
+        offset = 0
+
+        async with httpx.AsyncClient(timeout=self.DEFAULT_TIMEOUT) as client:
+            while len(business_list.business_list) < total and offset < self.MAX_OFFSET:
+                page_size = min(self.PER_PAGE, total - len(business_list.business_list))
+                params = {
+                    "term": term,
+                    "location": location,
+                    "limit": page_size,
+                    "offset": offset,
+                    "sort_by": "best_match",
+                }
+                # Map locale (en, de, ja...) to Yelp's ``locale`` param where supported
+                locale = kwargs.get("locale", "en")
+                yelp_locale = self._map_locale(locale)
+                if yelp_locale:
+                    params["locale"] = yelp_locale
+
+                response = await client.get(
+                    self.BASE_URL, params=params, headers=headers
+                )
+
+                if response.status_code == 401:
+                    raise PermissionError("Yelp API key invalid or revoked")
+                if response.status_code == 429:
+                    raise PermissionError(
+                        "Yelp rate limit hit (5,000 calls/day). "
+                        "Wait until tomorrow or upgrade."
+                    )
+                response.raise_for_status()
+                data = response.json()
+
+                results = data.get("businesses", [])
+                if not results:
+                    break
+
+                for item in results:
+                    business_list.add(self._parse(item))
+                    if progress_callback:
+                        await progress_callback(
+                            len(business_list.business_list), total
+                        )
+                    if len(business_list.business_list) >= total:
+                        break
+
+                if len(results) < page_size:
+                    break  # last page
+
+                offset += self.PER_PAGE
+
+        logger.info("Yelp returned %d results", len(business_list))
+        return business_list
+
+    # ------------------------------------------------------------------ helpers
+
+    @staticmethod
+    def _parse_query(query: str) -> tuple[str, str]:
+        """Split 'plumbers in Brooklyn' → ('plumbers', 'Brooklyn')."""
+        query = query.strip()
+        for sep in (" in ", " near ", " around "):
+            lower = query.lower()
+            if sep in lower:
+                idx = lower.find(sep)
+                return query[:idx].strip(), query[idx + len(sep):].strip()
+        return query, ""
+
+    @staticmethod
+    def _map_locale(locale: str) -> Optional[str]:
+        """Map our locale codes to Yelp's supported locales."""
+        # Yelp supports: cs_CZ, da_DK, de_AT, de_CH, de_DE, en_AU, en_BE,
+        # en_CA, en_CH, en_GB, en_HK, en_IE, en_MY, en_NZ, en_PH, en_SG,
+        # en_US, en_ZA, es_AR, es_CL, es_ES, es_MX, es_VE, fr_BE, fr_CA,
+        # fr_CH, fr_FR, it_CH, it_IT, ja_JP, nl_BE, nl_NL, pl_PL, pt_BR,
+        # pt_PT, sv_FI, sv_SE, tr_TR, zh_CN, zh_HK, zh_TW
+        mapping = {
+            "en": "en_US",
+            "en-GB": "en_GB",
+            "de": "de_DE",
+            "fr": "fr_FR",
+            "es": "es_ES",
+            "it": "it_IT",
+            "ja": "ja_JP",
+            "ko": None,  # not supported by Yelp
+            "pt-BR": "pt_BR",
+            "zh-CN": "zh_CN",
+            "ar": None,  # not supported
+        }
+        return mapping.get(locale)
+
+    @staticmethod
+    def _parse(item: dict) -> Business:
+        loc = item.get("location") or {}
+        coords = item.get("coordinates") or {}
+        cats = item.get("categories") or []
+        category = cats[0].get("title") if cats else None
+
+        # Build full address from display_address if available
+        address = None
+        if loc.get("display_address"):
+            address = ", ".join(loc["display_address"])
+        elif loc:
+            parts = [
+                loc.get("address1"),
+                loc.get("city"),
+                loc.get("state"),
+                loc.get("zip_code"),
+            ]
+            address = ", ".join(p for p in parts if p) or None
+
+        return Business(
+            name=item.get("name"),
+            address=address,
+            # Yelp returns the Yelp page URL; the business's own website isn't in v3
+            website=item.get("url"),
+            phone_number=item.get("display_phone") or item.get("phone"),
+            category=category,
+            reviews_average=_safe_float(item.get("rating")),
+            reviews_count=_safe_int(item.get("review_count")),
+            latitude=_safe_float(coords.get("latitude")),
+            longitude=_safe_float(coords.get("longitude")),
+            google_maps_url=None,
+        )
+
+
+# ---------------------------------------------------------------------------
 # Factory
 # ---------------------------------------------------------------------------
 
@@ -282,6 +854,9 @@ _BACKEND_REGISTRY: dict[str, type[ScraperBackend]] = {
     "playwright": PlaywrightBackend,
     "outscraper": OutscraperBackend,
     "serpapi": SerpApiBackend,
+    "osm": OSMBackend,
+    "openstreetmap": OSMBackend,
+    "yelp": YelpBackend,
     "out": OutscraperBackend,  # alias
     "serp": SerpApiBackend,  # alias
 }

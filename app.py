@@ -125,11 +125,13 @@ with st.sidebar:
 
     # ---- Backend selector --------------------------------------------------
     backend_options = {
-        "playwright": "🆓 Playwright — free, self-hosted",
+        "osm": "🆓 OpenStreetMap — 100% free, no signup",
+        "yelp": "🆓 Yelp Fusion — 150k/mo free, with ratings",
+        "playwright": "🆓 Playwright — free, self-hosted (brittle)",
         "outscraper": "💎 Outscraper — paid, robust (~$1/1k)",
         "serpapi": "💎 SerpApi — paid, robust (~$50/5k)",
     }
-    env_backend = os.environ.get("SCRAPER_BACKEND", "playwright").lower()
+    env_backend = os.environ.get("SCRAPER_BACKEND", "osm").lower()
     default_idx = list(backend_options.keys()).index(env_backend) if env_backend in backend_options else 0
 
     backend_name = st.selectbox(
@@ -137,12 +139,13 @@ with st.sidebar:
         options=list(backend_options.keys()),
         format_func=lambda k: backend_options[k],
         index=default_idx,
-        help="Switch to a paid API for reliability at scale. Free tier works for casual use.",
+        help="OSM is free and reliable but lacks ratings/reviews. Yelp is free with ratings. Paid APIs are best for scale.",
     )
 
     # API key inputs (only show when needed)
     outscraper_key = ""
     serpapi_key = ""
+    yelp_key = ""
     if backend_name == "outscraper":
         outscraper_key = st.text_input(
             "Outscraper API key",
@@ -161,10 +164,20 @@ with st.sidebar:
         )
         if not serpapi_key:
             st.warning("SerpApi API key required")
+    elif backend_name == "yelp":
+        yelp_key = st.text_input(
+            "Yelp Fusion API key",
+            value=os.environ.get("YELP_API_KEY", ""),
+            type="password",
+            help="Free 5,000 calls/day at https://www.yelp.com/developers/v3/manage_app",
+        )
+        if not yelp_key:
+            st.warning("Yelp API key required")
+        st.caption("Free tier: 5,000 calls/day = ~150,000 leads/month")
 
     st.divider()
 
-    # ---- Playwright-specific options (only when relevant) ------------------
+    # ---- Backend-specific options (only show when relevant) ---------------
     headless = True
     if backend_name == "playwright":
         headless = st.toggle(
@@ -175,12 +188,24 @@ with st.sidebar:
                 "Off: real visible window (slower, stealthier). Off requires a display."
             ),
         )
+    elif backend_name == "osm":
+        st.info(
+            "💡 OSM queries need a **location**: e.g. \"coffee shops in Brooklyn\"",
+            icon="ℹ️",
+        )
+    elif backend_name == "yelp":
+        st.info(
+            "💡 Yelp queries need a **location**: e.g. \"plumbers in Brooklyn\"",
+            icon="ℹ️",
+        )
 
     locale = st.selectbox(
         "Search region (locale)",
         options=[
             ("en", "English (US)"),
             ("en-GB", "English (UK)"),
+            ("en-IN", "English (India)"),
+            ("hi", "हिन्दी (Hindi)"),
             ("de", "Deutsch"),
             ("fr", "Français"),
             ("es", "Español"),
@@ -338,6 +363,8 @@ if run:
                     os.environ["OUTSCRAPER_API_KEY"] = outscraper_key
                 elif backend_name == "serpapi" and serpapi_key:
                     os.environ["SERPAPI_API_KEY"] = serpapi_key
+                elif backend_name == "yelp" and yelp_key:
+                    os.environ["YELP_API_KEY"] = yelp_key
 
                 backend = get_backend(backend_name)
                 result = await backend.scrape(
