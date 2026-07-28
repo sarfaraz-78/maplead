@@ -1317,8 +1317,32 @@ class FoursquareBackend:
 # ---------------------------------------------------------------------------
 
 
+# Lazy loader for BotasaurusBackend — keeps import-time cost zero so users
+# without botasaurus installed don't break at app startup.
+class _LazyBotasaurusBackend:
+    """Proxy that defers importing botasaurus_backend until first use."""
+
+    name = "Botasaurus (free, anti-detect)"
+    requires_api_key = False
+
+    def __init__(self) -> None:
+        try:
+            from botasaurus_backend import BotasaurusBackend as _Real
+        except ImportError as exc:
+            raise RuntimeError(
+                "Botasaurus backend requested but not installed. "
+                "Run:  pip install botasaurus  "
+                "Then restart the app."
+            ) from exc
+        self._real = _Real()
+
+    def __getattr__(self, item: str) -> Any:
+        return getattr(self._real, item)
+
+
 _BACKEND_REGISTRY: dict[str, type[ScraperBackend]] = {
     "playwright": PlaywrightBackend,
+    "botasaurus": _LazyBotasaurusBackend,
     "outscraper": OutscraperBackend,
     "serpapi": SerpApiBackend,
     "osm": OSMBackend,
@@ -1331,6 +1355,7 @@ _BACKEND_REGISTRY: dict[str, type[ScraperBackend]] = {
     "apify": JustDialBackend,  # alias
     "out": OutscraperBackend,  # alias
     "serp": SerpApiBackend,  # alias
+    "omkar": _LazyBotasaurusBackend,  # alias
 }
 
 

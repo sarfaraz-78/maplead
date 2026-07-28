@@ -130,7 +130,8 @@ with st.sidebar:
         "indiamart": "🇮🇳 IndiaMART — India-specific B2B, ~$2/1k (~$5 free/mo)",
         "foursquare": "⚠️ Foursquare — free tier BROKEN by Foursquare (410)",
         "yelp": "🆓 Yelp Fusion — 150k/mo free (limited India)",
-        "playwright": "🆓 Playwright — free, self-hosted (brittle)",
+        "playwright": "🆓 Playwright — free, brittle (stops at ~7 leads)",
+        "botasaurus": "🛡️ Botasaurus — FREE, anti-detect, no key (best free option)",
         "outscraper": "💎 Outscraper — paid, robust (~$1/1k, works in India)",
         "serpapi": "💎 SerpApi — paid, robust (~$50/5k)",
     }
@@ -236,6 +237,12 @@ with st.sidebar:
     elif backend_name == "indiamart":
         st.info(
             "🇮🇳 **IndiaMART queries are B2B products**: e.g. \"LED lights\" or \"cotton fabric\"",
+            icon="ℹ️",
+        )
+    elif backend_name == "botasaurus":
+        st.info(
+            "🛡️ **Botasaurus** — anti-detect Google Maps scraper. Free, no API key. "
+            "First run takes ~30s to launch Chrome. Best free option for 100+ leads.",
             icon="ℹ️",
         )
 

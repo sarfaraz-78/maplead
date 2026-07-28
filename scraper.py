@@ -304,7 +304,7 @@ async def _dismiss_consent(page: Page) -> None:
         logger.debug("Consent dismissal skipped: %s", exc)
 
 
-async def humanize_scroll(page: Page, target: int, max_rounds: int = 80) -> int:
+async def humanize_scroll(page: Page, target: int, max_rounds: int = 150) -> int:
     """Scroll the listings panel in a human-like pattern until ``target`` items are loaded.
 
     Google Maps results live in a scrollable sidebar — if the mouse isn't hovering over
@@ -373,7 +373,7 @@ async def humanize_scroll(page: Page, target: int, max_rounds: int = 80) -> int:
 
         if current == previous_count:
             no_change_rounds += 1
-            if no_change_rounds >= 5:
+            if no_change_rounds >= 10:
                 logger.info("No more new listings after %d rounds (%d total)", no_change_rounds, current)
                 return current
         else:
@@ -398,9 +398,9 @@ async def humanize_scroll(page: Page, target: int, max_rounds: int = 80) -> int:
                 if panel_handle is not None:
                     await panel_handle.hover()
                 # Multiple small wheel events (more human-like, registers more reliably)
-                for _ in range(random.randint(4, 7)):
-                    await page.mouse.wheel(0, random.randint(400, 900))
-                    await page.wait_for_timeout(random.randint(100, 220))
+                for _ in range(random.randint(6, 10)):
+                    await page.mouse.wheel(0, random.randint(300, 700))
+                    await page.wait_for_timeout(random.randint(180, 380))
             except Exception:  # noqa: BLE001
                 pass
 
@@ -413,7 +413,7 @@ async def humanize_scroll(page: Page, target: int, max_rounds: int = 80) -> int:
             except Exception:  # noqa: BLE001
                 pass
 
-        await page.wait_for_timeout(random.randint(700, 1300))
+        await page.wait_for_timeout(random.uniform(1400, 2400))
 
         previous_count = current
 
@@ -507,10 +507,20 @@ async def scrape_businesses(
             ignore_https_errors=True,
         )
 
-        # Anti-bot: hide webdriver flag
+        # Anti-bot: hide webdriver flag + spoof common fingerprint signals
+        # Google's modern anti-bot checks Canvas, WebGL, AudioContext, etc.
+        # Note: full bypass requires botasaurus-driver (see `botasaurus_backend.py`).
+        # These init scripts improve things incrementally for plain Playwright.
         await context.add_init_script(
             """
+            // Hide webdriver
             Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+            // Spoof languages (don't leak automation's default 'en-US')
+            Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+            // Spoof plugins length (headless = 0; real browsers have more)
+            Object.defineProperty(navigator, 'plugins', {
+                get: () => [1, 2, 3, 4, 5],
+            });
             window.chrome = { runtime: {} };
             """
         )
