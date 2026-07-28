@@ -318,11 +318,10 @@ with st.sidebar:
         use_container_width=True,
         key="run_lead_pack",
     ):
+        # Only set the activation flag here. Read the other widget values
+        # directly from session_state at runtime (Streamlit reserves the
+        # widget keys — you can't reassign to them after instantiation).
         st.session_state.lead_pack_active = True
-        st.session_state.lead_pack_name = pack_name
-        st.session_state.lead_pack_queries = pack
-        st.session_state.lead_pack_per_query = per_query
-        st.session_state.lead_pack_backend = free_backend
 
     st.divider()
     st.markdown("### 📚 Tips")
@@ -552,10 +551,12 @@ if run:
 # ---------------------------------------------------------------------------
 
 if st.session_state.get("lead_pack_active"):
-    pack_name: str = st.session_state.get("lead_pack_name", "Campaign")
-    pack: list[dict] = st.session_state.get("lead_pack_queries", [])
+    # Read widget values directly from session_state — Streamlit stores them
+    # under their widget keys. We must NOT reassign to those keys.
+    pack_name: str = st.session_state.get("lead_pack_select", "Campaign")
+    pack: list[dict] = LEAD_PACKS.get(pack_name, [])
     per_query: int = st.session_state.get("lead_pack_per_query", 30)
-    pack_backend: str = st.session_state.get("lead_pack_backend", "botasaurus")
+    pack_backend: str = backend_name if backend_name in ("botasaurus", "playwright") else "botasaurus"
 
     # Reset the flag so the button click doesn't re-trigger on rerun
     st.session_state.lead_pack_active = False
