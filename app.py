@@ -125,10 +125,13 @@ with st.sidebar:
 
     # ---- Backend selector --------------------------------------------------
     backend_options = {
-        "osm": "🆓 OpenStreetMap — 100% free, no signup",
-        "yelp": "🆓 Yelp Fusion — 150k/mo free, with ratings",
+        "osm": "🆓 OpenStreetMap — 100% free, no signup, works in India",
+        "justdial": "🇮🇳 JustDial — India-specific, ~$2/1k (~$5 free credit/mo)",
+        "indiamart": "🇮🇳 IndiaMART — India-specific B2B, ~$2/1k (~$5 free/mo)",
+        "foursquare": "⚠️ Foursquare — free tier BROKEN by Foursquare (410)",
+        "yelp": "🆓 Yelp Fusion — 150k/mo free (limited India)",
         "playwright": "🆓 Playwright — free, self-hosted (brittle)",
-        "outscraper": "💎 Outscraper — paid, robust (~$1/1k)",
+        "outscraper": "💎 Outscraper — paid, robust (~$1/1k, works in India)",
         "serpapi": "💎 SerpApi — paid, robust (~$50/5k)",
     }
     env_backend = os.environ.get("SCRAPER_BACKEND", "osm").lower()
@@ -139,13 +142,15 @@ with st.sidebar:
         options=list(backend_options.keys()),
         format_func=lambda k: backend_options[k],
         index=default_idx,
-        help="OSM is free and reliable but lacks ratings/reviews. Yelp is free with ratings. Paid APIs are best for scale.",
+        help="For India: OSM (free, partial) or Foursquare (free, ratings). For best data: Outscraper (~$1/1k).",
     )
 
     # API key inputs (only show when needed)
     outscraper_key = ""
     serpapi_key = ""
     yelp_key = ""
+    foursquare_key = ""
+    apify_key = ""
     if backend_name == "outscraper":
         outscraper_key = st.text_input(
             "Outscraper API key",
@@ -174,6 +179,26 @@ with st.sidebar:
         if not yelp_key:
             st.warning("Yelp API key required")
         st.caption("Free tier: 5,000 calls/day = ~150,000 leads/month")
+    elif backend_name == "foursquare":
+        foursquare_key = st.text_input(
+            "Foursquare API key",
+            value=os.environ.get("FOURSQUARE_API_KEY", ""),
+            type="password",
+            help="Free 100,000 calls/month at https://foursquare.com/developers/",
+        )
+        if not foursquare_key:
+            st.warning("Foursquare API key required")
+        st.caption("Free tier: 100,000 calls/month, works in India")
+    elif backend_name in ("justdial", "indiamart"):
+        apify_key = st.text_input(
+            "Apify API token",
+            value=os.environ.get("APIFY_API_KEY", ""),
+            type="password",
+            help="Free $5/month credit at https://console.apify.com/",
+        )
+        if not apify_key:
+            st.warning("Apify API token required")
+        st.caption("Free $5/month credit ≈ 2,500 leads · $2 per 1,000 after")
 
     st.divider()
 
@@ -196,6 +221,21 @@ with st.sidebar:
     elif backend_name == "yelp":
         st.info(
             "💡 Yelp queries need a **location**: e.g. \"plumbers in Brooklyn\"",
+            icon="ℹ️",
+        )
+    elif backend_name == "foursquare":
+        st.info(
+            "💡 Foursquare queries need a **location**: e.g. \"cafes in Mumbai\"",
+            icon="ℹ️",
+        )
+    elif backend_name == "justdial":
+        st.info(
+            "🇮🇳 **JustDial queries need a city**: e.g. \"restaurants in Mumbai\"",
+            icon="ℹ️",
+        )
+    elif backend_name == "indiamart":
+        st.info(
+            "🇮🇳 **IndiaMART queries are B2B products**: e.g. \"LED lights\" or \"cotton fabric\"",
             icon="ℹ️",
         )
 
@@ -365,6 +405,10 @@ if run:
                     os.environ["SERPAPI_API_KEY"] = serpapi_key
                 elif backend_name == "yelp" and yelp_key:
                     os.environ["YELP_API_KEY"] = yelp_key
+                elif backend_name == "foursquare" and foursquare_key:
+                    os.environ["FOURSQUARE_API_KEY"] = foursquare_key
+                elif backend_name in ("justdial", "indiamart") and apify_key:
+                    os.environ["APIFY_API_KEY"] = apify_key
 
                 backend = get_backend(backend_name)
                 result = await backend.scrape(

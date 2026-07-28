@@ -846,6 +846,429 @@ class YelpBackend:
 
 
 # ---------------------------------------------------------------------------
+# Apify-backed JustDial & IndiaMART scrapers
+# ---------------------------------------------------------------------------
+
+
+class ApifyBackend:
+    """Generic Apify actor runner.
+
+    Calls an Apify actor, waits for completion, and returns the dataset
+    items as Business objects. Subclasses configure the actor ID, input
+    shape, and result parser.
+
+    Pricing model: actors on Apify charge per-event (per-result). The user
+    pays Apify directly; we never touch their card. They get $5/month
+    free credit which covers ~2,500 free leads.
+
+    Sign up: https://console.apify.com/
+    Get key: Settings -> Integrations -> Personal API tokens
+    """
+
+    BASE_URL = "https://api.apify.com/v2"
+    POLL_INTERVAL = 4  # seconds between status checks
+    MAX_WAIT = 600  # 10 min total
+
+    ACTOR_ID: str = ""
+    RESULT_PARSER = staticmethod(lambda item: Business())
+
+    def __init__(self, api_key: Optional[str] = None) -> None:
+        self.api_key = api_key or os.environ.get("APIFY_API_KEY", "")
+        if not self.api_key:
+            raise ValueError(
+                "Apify API key missing. "
+                "Set APIFY_API_KEY or pass api_key=...  "
+                "Get a free one at https://console.apify.com/"
+            )
+
+    def _build_input(self, search_term: str, total: int, **kwargs) -> dict:
+        """Override in subclasses to define actor-specific input."""
+        return {"search": search_term, "maxItems": total}
+
+    async def scrape(
+        self,
+        search_term: str,
+        total: int = 30,
+        progress_callback: Optional[ProgressCallback] = None,
+        **kwargs: Any,
+    ) -> BusinessList:
+        actor_input = self._build_input(search_term, total, **kwargs)
+        headers = {"Authorization": f"Bearer {self.api_key}"}
+
+        logger.info("Apify run: actor=%s input=%s", self.ACTOR_ID, actor_input)
+
+        async with httpx.AsyncClient(timeout=60) as client:
+            # Start the run
+            response = await client.post(
+                f"{self.BASE_URL}/acts/{self.ACTOR_ID}/runs",
+                json=actor_input,
+                headers=headers,
+                params={"waitForFinish": str(self.MAX_WAIT // 1000)},  # seconds
+            )
+            if response.status_code == 401:
+                raise PermissionError("Apify API token invalid or revoked")
+            if response.status_code == 402:
+                raise PermissionError(
+                    "Apify account out of credits. "
+                    "Top up at https://console.apify.com/billing"
+                )
+            response.raise_for_status()
+            run_data = response.json()["data"]
+            dataset_id = run_data.get("defaultDatasetId")
+            run_status = run_data.get("status")
+            run_id = run_data.get("id")
+
+            # If not finished yet (waitForFinish timed out), poll
+            wait = 0
+            while run_status not in ("SUCCEEDED", "FAILED", "ABORTED", "TIMED-OUT") and wait < self.MAX_WAIT:
+                await asyncio.sleep(self.POLL_INTERVAL)
+                wait += self.POLL_INTERVAL
+                status_response = await client.get(
+                    f"{self.BASE_URL}/actor-runs/{run_id}", headers=headers
+                )
+                status_response.raise_for_status()
+                run_status = status_response.json()["data"]["status"]
+
+            if run_status != "SUCCEEDED":
+                raise RuntimeError(
+                    f"Apify actor run ended with status: {run_status}. "
+                    f"Check https://console.apify.com/actors/runs/{run_id}"
+                )
+
+            # Fetch dataset items
+            items_response = await client.get(
+                f"{self.BASE_URL}/datasets/{dataset_id}/items",
+                headers=headers,
+                params={"limit": total},
+            )
+            items_response.raise_for_status()
+            items = items_response.json()
+
+        logger.info("Apify actor returned %d items", len(items))
+
+        business_list = BusinessList()
+        for idx, item in enumerate(items[:total]):
+            business_list.add(self.RESULT_PARSER(item))
+            if progress_callback:
+                await progress_callback(idx + 1, min(len(items), total))
+
+        return business_list
+
+
+class JustDialBackend(ApifyBackend):
+    """JustDial business listings via Apify.
+
+    Cost: ~$2 per 1,000 results (thirdwatch actor, pay-per-event).
+    Free $5/month Apify credit = ~2,500 free leads.
+
+    Returns: name, decoded phone (real numbers, not blurred), WhatsApp,
+             email, full address, GPS, rating, reviews count, category,
+             working hours. 30M+ listings across 1,000+ Indian cities.
+
+    Actor: thirdwatch/justdial-business-scraper
+    """
+
+    name = "JustDial (Apify)"
+    requires_api_key = True
+
+    ACTOR_ID = "Rnln0C6qaFWuidVl5"  # thirdwatch/justdial-business-scraper
+
+    def _build_input(self, search_term: str, total: int, **kwargs: Any) -> dict:
+        # JustDial URL pattern: https://www.justdial.com/{City}/{Category}
+        # Actor accepts either (city + category) or full URLs
+        # Parse query like "restaurants in Mumbai" → city=Mumbai, category=restaurants
+        city, category = self._parse_query(search_term)
+        if not city:
+            raise ValueError(
+                "JustDial backend needs a city. "
+                'Use a query like "restaurants in Mumbai".'
+            )
+        return {
+            "city": city,
+            "search": category or "all",
+            "maxItems": min(total, 500),
+        }
+
+    @staticmethod
+    def _parse_query(query: str) -> tuple[str, str]:
+        """Split 'restaurants in Mumbai' → ('Mumbai', 'restaurants')."""
+        query = query.strip()
+        for sep in (" in ", " near ", " around "):
+            lower = query.lower()
+            if sep in lower:
+                idx = lower.find(sep)
+                category = query[:idx].strip()
+                city = query[idx + len(sep):].strip()
+                return city, category
+        return "", query  # treat as category only, no city
+
+    @staticmethod
+    def RESULT_PARSER(item: dict) -> Business:
+        addr = item.get("address") or {}
+        if isinstance(addr, str):
+            address = addr
+        else:
+            parts = [
+                addr.get("street"),
+                addr.get("area"),
+                addr.get("city"),
+                addr.get("state"),
+                addr.get("pincode"),
+            ]
+            address = ", ".join(p for p in parts if p) or None
+        gps = item.get("gps") or item.get("location") or {}
+        return Business(
+            name=item.get("name") or item.get("business_name"),
+            address=address,
+            website=item.get("website"),
+            phone_number=item.get("phone") or item.get("mobile"),
+            category=item.get("category") or item.get("main_category"),
+            reviews_average=_safe_float(item.get("rating")),
+            reviews_count=_safe_int(item.get("rating_count") or item.get("reviews")),
+            latitude=_safe_float(gps.get("lat") or gps.get("latitude")),
+            longitude=_safe_float(gps.get("lng") or gps.get("longitude")),
+            google_maps_url=item.get("justdial_url") or item.get("url"),
+        )
+
+
+class IndiaMARTBackend(ApifyBackend):
+    """IndiaMART B2B supplier listings via Apify.
+
+    Cost: ~$2 per 1,000 results (thirdwatch actor).
+    Free $5/month Apify credit = ~2,500 free leads.
+
+    Returns: company name, contact, products, prices, GST number,
+             turnover, employee count. 10M+ suppliers across India.
+
+    Actor: thirdwatch/indiamart-supplier-scraper
+    """
+
+    name = "IndiaMART (Apify)"
+    requires_api_key = True
+
+    ACTOR_ID = "VIGpnYPrbIJgZp49F"  # thirdwatch/indiamart-supplier-scraper
+
+    def _build_input(self, search_term: str, total: int, **kwargs: Any) -> dict:
+        # IndiaMART accepts a search term directly
+        return {
+            "search": search_term,
+            "maxItems": min(total, 500),
+        }
+
+    @staticmethod
+    def RESULT_PARSER(item: dict) -> Business:
+        contact = item.get("contact") or {}
+        if isinstance(contact, str):
+            phone = contact
+            website = None
+        else:
+            phone = contact.get("phone") or contact.get("mobile")
+            website = contact.get("website") or contact.get("url")
+        loc = item.get("location") or {}
+        addr = item.get("address")
+        if not addr and loc:
+            parts = [
+                loc.get("city"),
+                loc.get("state"),
+                loc.get("country"),
+            ]
+            addr = ", ".join(p for p in parts if p) or None
+        return Business(
+            name=item.get("company_name") or item.get("name") or item.get("supplier"),
+            address=addr,
+            website=website,
+            phone_number=phone,
+            category=item.get("category") or (item.get("products") or [None])[0] if item.get("products") else None,
+            reviews_average=None,  # IndiaMART doesn't expose ratings
+            reviews_count=None,
+            latitude=_safe_float(item.get("latitude") or (loc.get("lat") if isinstance(loc, dict) else None)),
+            longitude=_safe_float(item.get("longitude") or (loc.get("lng") if isinstance(loc, dict) else None)),
+            google_maps_url=item.get("indiamart_url") or item.get("url"),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Foursquare Places API
+# ---------------------------------------------------------------------------
+
+
+class FoursquareBackend:
+    """Foursquare Places API v3.
+
+    Free tier: 100,000 calls/month (no credit card required).
+    Works in India (decent metro coverage, weaker in tier-2/3 cities).
+    Includes: name, address, phone, website, category, lat/lon,
+              Foursquare rating (0-10 scale), review count, verified flag.
+
+    Sign up:  https://foursquare.com/developers/
+    Docs:     https://docs.foursquare.com/v3/
+
+    Note: Foursquare's free tier is for personal/dev use — commercial use
+    requires a paid plan starting around $99/mo. But for 100k leads/month
+    casual use, free works.
+    """
+
+    name = "Foursquare Places"
+    requires_api_key = True
+
+    BASE_URL = "https://api.foursquare.com/v3/places/search"
+    PER_PAGE = 50  # Foursquare max per call
+    DEFAULT_TIMEOUT = 30.0
+
+    def __init__(self, api_key: Optional[str] = None) -> None:
+        # Foursquare v3 uses the API key directly in the Authorization header (no Bearer prefix)
+        self.api_key = api_key or os.environ.get("FOURSQUARE_API_KEY", "")
+        if not self.api_key:
+            raise ValueError(
+                "Foursquare API key missing. "
+                "Set FOURSQUARE_API_KEY or pass api_key=...  "
+                "Get a free key at https://foursquare.com/developers/"
+            )
+
+    async def scrape(
+        self,
+        search_term: str,
+        total: int = 30,
+        progress_callback: Optional[ProgressCallback] = None,
+        **kwargs: Any,
+    ) -> BusinessList:
+        # Foursquare doesn't have a generic "term + location" combined search;
+        # we use ``query`` (term) and ``near`` (location). Split if possible.
+        query, location = self._parse_query(search_term)
+        if not location:
+            raise ValueError(
+                "Foursquare backend needs a location. "
+                'Use a query like "plumbers in Mumbai" — not just "plumbers".'
+            )
+
+        headers = {
+            "Authorization": self.api_key,  # v3 uses direct key, no Bearer
+            "Accept": "application/json",
+        }
+        business_list = BusinessList()
+
+        async with httpx.AsyncClient(timeout=self.DEFAULT_TIMEOUT) as client:
+            # v3 uses cursor-based pagination via the ``cursor`` parameter
+            cursor: Optional[str] = None
+
+            while len(business_list.business_list) < total:
+                page_size = min(self.PER_PAGE, total - len(business_list.business_list))
+                params = {
+                    "query": query or None,
+                    "near": location,
+                    "limit": page_size,
+                    "sort": "RELEVANCE",
+                }
+                if cursor:
+                    params["cursor"] = cursor
+
+                logger.info(
+                    "Foursquare request: query=%r near=%r limit=%d cursor=%s",
+                    query, location, page_size, bool(cursor),
+                )
+
+                response = await client.get(
+                    self.BASE_URL, params=params, headers=headers
+                )
+
+                if response.status_code == 401:
+                    raise PermissionError(
+                        "Foursquare API key invalid or revoked. "
+                        "Get a new one at https://foursquare.com/developers/"
+                    )
+                if response.status_code == 410:
+                    raise PermissionError(
+                        "Foursquare deprecated their free API (HTTP 410 Gone). "
+                        "The free tier no longer works. "
+                        "Switch to OSM (sidebar) for free India data, "
+                        "or use Outscraper for paid Google-quality data."
+                    )
+                if response.status_code == 429:
+                    raise PermissionError(
+                        "Foursquare rate limit hit. Free tier is 100k/month — "
+                        "wait or upgrade."
+                    )
+                response.raise_for_status()
+                data = response.json()
+
+                results = data.get("results", [])
+                if not results:
+                    break
+
+                for item in results:
+                    business_list.add(self._parse(item))
+                    if progress_callback:
+                        await progress_callback(
+                            len(business_list.business_list), total
+                        )
+                    if len(business_list.business_list) >= total:
+                        break
+
+                # Get cursor for next page
+                context = data.get("context", {}) or {}
+                cursor = context.get("next", {}).get("cursor") if context else None
+                if not cursor or len(results) < page_size:
+                    break
+
+        logger.info("Foursquare returned %d results", len(business_list))
+        return business_list
+
+    # ------------------------------------------------------------------ helpers
+
+    @staticmethod
+    def _parse_query(query: str) -> tuple[str, str]:
+        """Split 'plumbers in Mumbai' → ('plumbers', 'Mumbai')."""
+        query = query.strip()
+        for sep in (" in ", " near ", " around "):
+            lower = query.lower()
+            if sep in lower:
+                idx = lower.find(sep)
+                return query[:idx].strip(), query[idx + len(sep):].strip()
+        return query, ""
+
+    @staticmethod
+    def _parse(item: dict) -> Business:
+        geo = (item.get("geocodes") or {}).get("main") or {}
+        loc = item.get("location") or {}
+        cats = item.get("categories") or []
+        category = cats[0].get("name") if cats else None
+
+        # Foursquare rating is 0-10; convert to 0-5 to match other backends
+        raw_rating = _safe_float(item.get("rating"))
+        rating_5 = (raw_rating / 2.0) if raw_rating is not None else None
+
+        # Address — prefer formatted, fall back to pieces
+        address = (
+            loc.get("formatted_address")
+            or loc.get("address")
+        )
+        if not address:
+            parts = [
+                loc.get("address"),
+                loc.get("locality"),
+                loc.get("region"),
+                loc.get("postcode"),
+                loc.get("country"),
+            ]
+            address = ", ".join(p for p in parts if p) or None
+
+        return Business(
+            name=item.get("name"),
+            address=address,
+            website=item.get("website"),
+            phone_number=item.get("tel"),
+            category=category,
+            reviews_average=rating_5,
+            reviews_count=_safe_int(
+                (item.get("stats") or {}).get("total_ratings")
+            ),
+            latitude=_safe_float(geo.get("latitude")),
+            longitude=_safe_float(geo.get("longitude")),
+            google_maps_url=None,  # Foursquare doesn't provide Maps link
+        )
+
+
+# ---------------------------------------------------------------------------
 # Factory
 # ---------------------------------------------------------------------------
 
@@ -857,6 +1280,11 @@ _BACKEND_REGISTRY: dict[str, type[ScraperBackend]] = {
     "osm": OSMBackend,
     "openstreetmap": OSMBackend,
     "yelp": YelpBackend,
+    "foursquare": FoursquareBackend,
+    "fsq": FoursquareBackend,  # alias
+    "justdial": JustDialBackend,
+    "indiamart": IndiaMARTBackend,
+    "apify": JustDialBackend,  # alias
     "out": OutscraperBackend,  # alias
     "serp": SerpApiBackend,  # alias
 }
