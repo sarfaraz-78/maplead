@@ -961,11 +961,18 @@ class JustDialBackend(ApifyBackend):
     Cost: ~$2 per 1,000 results (thirdwatch actor, pay-per-event).
     Free $5/month Apify credit = ~2,500 free leads.
 
-    Returns: name, decoded phone (real numbers, not blurred), WhatsApp,
-             email, full address, GPS, rating, reviews count, category,
-             working hours. 30M+ listings across 1,000+ Indian cities.
+    Returns: name, decoded phone (real numbers, not blurred), full address,
+             rating, review count, category, working hours, website,
+             listing URL. 30M+ listings across 1,000+ Indian cities.
 
     Actor: thirdwatch/justdial-business-scraper
+    Actor input schema:
+        queries: list[str]              # categories to search (e.g. ["restaurants"])
+        city: str                       # city (e.g. "Mumbai")
+        maxResultsPerQuery: int         # 25/50/100 — total = queries * this
+    Actor output schema (per item):
+        business_name, category, location, address, phone,
+        rating, review_count, timing, website, photos_count, listing_url
     """
 
     name = "JustDial (Apify)"
@@ -974,8 +981,6 @@ class JustDialBackend(ApifyBackend):
     ACTOR_ID = "Rnln0C6qaFWuidVl5"  # thirdwatch/justdial-business-scraper
 
     def _build_input(self, search_term: str, total: int, **kwargs: Any) -> dict:
-        # JustDial URL pattern: https://www.justdial.com/{City}/{Category}
-        # Actor accepts either (city + category) or full URLs
         # Parse query like "restaurants in Mumbai" → city=Mumbai, category=restaurants
         city, category = self._parse_query(search_term)
         if not city:
@@ -983,10 +988,14 @@ class JustDialBackend(ApifyBackend):
                 "JustDial backend needs a city. "
                 'Use a query like "restaurants in Mumbai".'
             )
+        # Actor expects `queries` (list) + `city` + `maxResultsPerQuery`
+        # Each entry in `queries` × maxResultsPerQuery = total results.
+        # We send a single query and let maxResultsPerQuery handle the count.
+        per_query = min(total, 500)
         return {
+            "queries": [category or "all"],
             "city": city,
-            "search": category or "all",
-            "maxItems": min(total, 500),
+            "maxResultsPerQuery": per_query,
         }
 
     @staticmethod
@@ -1004,30 +1013,29 @@ class JustDialBackend(ApifyBackend):
 
     @staticmethod
     def RESULT_PARSER(item: dict) -> Business:
-        addr = item.get("address") or {}
-        if isinstance(addr, str):
-            address = addr
-        else:
-            parts = [
-                addr.get("street"),
-                addr.get("area"),
-                addr.get("city"),
-                addr.get("state"),
-                addr.get("pincode"),
-            ]
-            address = ", ".join(p for p in parts if p) or None
-        gps = item.get("gps") or item.get("location") or {}
+        # Actor returns flat strings, not nested dicts
+        address = item.get("address") or item.get("location")
+        phone = item.get("phone") or item.get("mobile") or item.get("phone_number")
+        listing_url = (
+            item.get("listing_url")
+            or item.get("justdial_url")
+            or item.get("url")
+        )
         return Business(
-            name=item.get("name") or item.get("business_name"),
+            name=item.get("business_name") or item.get("name"),
             address=address,
-            website=item.get("website"),
-            phone_number=item.get("phone") or item.get("mobile"),
+            website=item.get("website") or item.get("site"),
+            phone_number=phone,
             category=item.get("category") or item.get("main_category"),
             reviews_average=_safe_float(item.get("rating")),
-            reviews_count=_safe_int(item.get("rating_count") or item.get("reviews")),
-            latitude=_safe_float(gps.get("lat") or gps.get("latitude")),
-            longitude=_safe_float(gps.get("lng") or gps.get("longitude")),
-            google_maps_url=item.get("justdial_url") or item.get("url"),
+            reviews_count=_safe_int(
+                item.get("review_count")
+                or item.get("rating_count")
+                or item.get("reviews")
+            ),
+            latitude=None,  # JustDial actor does not return GPS coords
+            longitude=None,
+            google_maps_url=listing_url,
         )
 
 
@@ -1037,10 +1045,20 @@ class IndiaMARTBackend(ApifyBackend):
     Cost: ~$2 per 1,000 results (thirdwatch actor).
     Free $5/month Apify credit = ~2,500 free leads.
 
-    Returns: company name, contact, products, prices, GST number,
-             turnover, employee count. 10M+ suppliers across India.
+    Returns: company name, product name, price, MOQ, GST number,
+             supplier rating, member since, phone, city/state.
+             10M+ suppliers across India. Each row = (supplier, product) pair.
 
     Actor: thirdwatch/indiamart-supplier-scraper
+    Actor input schema:
+        queries: list[str]              # search terms (e.g. ["stainless steel pipes"])
+        location: str                   # optional (e.g. "Mumbai" or "Maharashtra")
+        maxResultsPerQuery: int         # 25/50/100 — total = queries * this
+    Actor output schema (per item):
+        company_name, product_name, price, moq,
+        product_url, catalog_url, image_url,
+        location (str), city, state, phone,
+        gst_number, supplier_rating, rating_count, member_since
     """
 
     name = "IndiaMART (Apify)"
@@ -1049,41 +1067,67 @@ class IndiaMARTBackend(ApifyBackend):
     ACTOR_ID = "VIGpnYPrbIJgZp49F"  # thirdwatch/indiamart-supplier-scraper
 
     def _build_input(self, search_term: str, total: int, **kwargs: Any) -> dict:
-        # IndiaMART accepts a search term directly
-        return {
-            "search": search_term,
-            "maxItems": min(total, 500),
+        # IndiaMART accepts a free-form search term + optional location.
+        # Smart-parse: "<product> in <city>" → queries=["<product>"], location="<city>"
+        # Otherwise send the whole thing as a single query.
+        text = search_term.strip()
+        loc = ""
+        query = text
+        lower = text.lower()
+        for sep in (" in ", " near ", " around "):
+            if sep in lower:
+                idx = lower.find(sep)
+                query = text[:idx].strip()
+                loc = text[idx + len(sep):].strip()
+                break
+        payload: dict[str, Any] = {
+            "queries": [query or "suppliers"],
+            "maxResultsPerQuery": min(total, 500),
         }
+        if loc:
+            payload["location"] = loc
+        return payload
 
     @staticmethod
     def RESULT_PARSER(item: dict) -> Business:
-        contact = item.get("contact") or {}
-        if isinstance(contact, str):
-            phone = contact
-            website = None
+        # Build a readable address from city + state (actor returns these
+        # as separate flat fields, not nested).
+        city = item.get("city") or ""
+        state = item.get("state") or ""
+        loc_str = item.get("location") or ""
+        if city or state:
+            address = ", ".join(p for p in (city, state) if p) or None
         else:
-            phone = contact.get("phone") or contact.get("mobile")
-            website = contact.get("website") or contact.get("url")
-        loc = item.get("location") or {}
-        addr = item.get("address")
-        if not addr and loc:
-            parts = [
-                loc.get("city"),
-                loc.get("state"),
-                loc.get("country"),
-            ]
-            addr = ", ".join(p for p in parts if p) or None
+            address = loc_str or None
+        # Build a useful "category" by combining category + product name
+        products = item.get("products") or []
+        first_product = products[0] if products else None
+        category = (
+            item.get("category")
+            or item.get("product_name")
+            or first_product
+        )
+        website = (
+            item.get("catalog_url")
+            or item.get("product_url")
+            or item.get("website")
+            or item.get("url")
+        )
         return Business(
-            name=item.get("company_name") or item.get("name") or item.get("supplier"),
-            address=addr,
+            name=item.get("company_name") or item.get("supplier") or item.get("name"),
+            address=address,
             website=website,
-            phone_number=phone,
-            category=item.get("category") or (item.get("products") or [None])[0] if item.get("products") else None,
-            reviews_average=None,  # IndiaMART doesn't expose ratings
-            reviews_count=None,
-            latitude=_safe_float(item.get("latitude") or (loc.get("lat") if isinstance(loc, dict) else None)),
-            longitude=_safe_float(item.get("longitude") or (loc.get("lng") if isinstance(loc, dict) else None)),
-            google_maps_url=item.get("indiamart_url") or item.get("url"),
+            phone_number=item.get("phone") or item.get("mobile") or item.get("phone_number"),
+            category=category,
+            reviews_average=_safe_float(
+                item.get("supplier_rating") or item.get("rating")
+            ),
+            reviews_count=_safe_int(
+                item.get("rating_count") or item.get("reviews")
+            ),
+            latitude=None,  # IndiaMART actor does not return GPS coords
+            longitude=None,
+            google_maps_url=item.get("product_url") or item.get("indiamart_url") or item.get("url"),
         )
 
 
