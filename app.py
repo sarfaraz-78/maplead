@@ -318,7 +318,7 @@ with st.sidebar:
         use_container_width=True,
         key="run_lead_pack",
     ):
-        st.session_state.run_lead_pack = True
+        st.session_state.lead_pack_active = True
         st.session_state.lead_pack_name = pack_name
         st.session_state.lead_pack_queries = pack
         st.session_state.lead_pack_per_query = per_query
@@ -551,14 +551,14 @@ if run:
 # Lead Pack runner — runs multiple queries sequentially and merges results
 # ---------------------------------------------------------------------------
 
-if st.session_state.get("run_lead_pack"):
+if st.session_state.get("lead_pack_active"):
     pack_name: str = st.session_state.get("lead_pack_name", "Campaign")
     pack: list[dict] = st.session_state.get("lead_pack_queries", [])
     per_query: int = st.session_state.get("lead_pack_per_query", 30)
     pack_backend: str = st.session_state.get("lead_pack_backend", "botasaurus")
 
     # Reset the flag so the button click doesn't re-trigger on rerun
-    st.session_state.run_lead_pack = False
+    st.session_state.lead_pack_active = False
 
     if not pack or get_backend is None:
         st.error("Lead Pack misconfigured or backends unavailable.")
