@@ -271,9 +271,15 @@ def _extract_details(driver) -> Optional[Business]:
         # Fallback: parse from page text — Google Maps always shows the count
         # somewhere on the detail panel, e.g. "4.6\n(2,089) reviews"
         page_text = driver.page_text or ""
-        m = re.search(r"\(([\d,]+)\)\s*reviews?", page_text)
+        # Try the most common pattern first: "2,089 reviews"
+        m = re.search(r"([\d,]+)\s*reviews?", page_text, re.IGNORECASE)
         if m:
             reviews_count = _safe_int(m.group(1))
+        else:
+            # Or the parenthesized form: "(2,089)" right after the rating
+            m = re.search(r"\(([\d,]+)\)", page_text)
+            if m:
+                reviews_count = _safe_int(m.group(1))
 
     category = driver.get_text(PLACE_CATEGORY) if driver.is_element_present(PLACE_CATEGORY) else None
 

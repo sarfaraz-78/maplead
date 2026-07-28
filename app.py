@@ -269,12 +269,68 @@ with st.sidebar:
     )[0]
 
     st.divider()
+    st.markdown("### 🎯 Lead Packs")
+    st.caption("One-click campaign presets. Runs multiple queries and merges the results.")
+
+    # Use Botasaurus by default for packs — it's free and works for all of these.
+    free_backend = backend_name if backend_name in ("botasaurus", "playwright") else "botasaurus"
+
+    LEAD_PACKS: dict[str, list[dict]] = {
+        "Signage Business \u2014 Hyderabad": [
+            {"label": "🍽 Restaurants", "query": "restaurants in Hyderabad", "target": 50},
+            {"label": "🛍 Shopping malls", "query": "shopping malls in Hyderabad", "target": 30},
+            {"label": "🏨 Hotels", "query": "hotels in Hyderabad", "target": 50},
+            {"label": "🏥 Hospitals & clinics", "query": "hospitals in Hyderabad", "target": 40},
+            {"label": "📢 Advertising agencies", "query": "advertising agencies in Hyderabad", "target": 30},
+            {"label": "🎉 Event organisers", "query": "event organisers in Hyderabad", "target": 25},
+        ],
+    }
+
+    pack_name = st.selectbox(
+        "Pick a campaign",
+        options=list(LEAD_PACKS.keys()),
+        index=0,
+        key="lead_pack_select",
+        help="Runs each query sequentially with the chosen backend and merges results.",
+    )
+    pack = LEAD_PACKS[pack_name]
+
+    per_query = st.slider(
+        "Leads per query",
+        min_value=10,
+        max_value=100,
+        value=30,
+        step=10,
+        key="lead_pack_per_query",
+        help="How many leads to scrape per query. Larger = slower.",
+    )
+
+    total_estimated = len(pack) * per_query
+    est_minutes = total_estimated * 0.15  # ~9s per lead for Botasaurus
+    st.caption(
+        f"📊 {len(pack)} queries × {per_query} = ~{total_estimated} leads, "
+        f"~{est_minutes:.0f} min with {free_backend}"
+    )
+
+    if st.button(
+        f"🚀 Run \"{pack_name}\" campaign",
+        type="primary",
+        use_container_width=True,
+        key="run_lead_pack",
+    ):
+        st.session_state.run_lead_pack = True
+        st.session_state.lead_pack_name = pack_name
+        st.session_state.lead_pack_queries = pack
+        st.session_state.lead_pack_per_query = per_query
+        st.session_state.lead_pack_backend = free_backend
+
+    st.divider()
     st.markdown("### 📚 Tips")
     st.markdown(
         """
-        - Be **specific** in your search term  
+        - Be **specific** in your search term
           `"Coffee shops in Brooklyn"` beats `"coffee"`
-        - Turn **off headless** if you hit CAPTCHAs
+        - Turn **off** headless if you hit CAPTCHAs
         - Larger batches take longer — start with 30
         - Don't run more than once per minute per IP
         - For production scale, switch to **Outscraper**
@@ -489,6 +545,92 @@ if run:
                 f"✅ Found {len(biz_list.business_list) if biz_list else 0} businesses in {elapsed:.1f}s"
             )
             st.rerun()
+
+
+# ---------------------------------------------------------------------------
+# Lead Pack runner — runs multiple queries sequentially and merges results
+# ---------------------------------------------------------------------------
+
+if st.session_state.get("run_lead_pack"):
+    pack_name: str = st.session_state.get("lead_pack_name", "Campaign")
+    pack: list[dict] = st.session_state.get("lead_pack_queries", [])
+    per_query: int = st.session_state.get("lead_pack_per_query", 30)
+    pack_backend: str = st.session_state.get("lead_pack_backend", "botasaurus")
+
+    # Reset the flag so the button click doesn't re-trigger on rerun
+    st.session_state.run_lead_pack = False
+
+    if not pack or get_backend is None:
+        st.error("Lead Pack misconfigured or backends unavailable.")
+    else:
+        st.markdown(f"### 🚀 Running campaign: **{pack_name}**")
+        st.caption(f"Using `{pack_backend}` backend — this may take several minutes.")
+
+        overall_status = st.status(
+            f"Starting campaign… 0/{len(pack)} queries done",
+            expanded=True,
+        )
+        progress_bar = st.progress(0.0)
+        all_businesses = []
+        failed_queries = []
+        t_start = time.time()
+
+        async def run_campaign() -> tuple[list, list]:
+            backend = get_backend(pack_backend)
+            collected: list = []
+            failed: list = []
+            for i, item in enumerate(pack):
+                q = item["query"]
+                t = item.get("target") or per_query
+                overall_status.update(
+                    label=f"[{i + 1}/{len(pack)}] {item['label']} — `{q}`",
+                )
+                try:
+                    sub = await backend.scrape(
+                        search_term=q,
+                        total=t,
+                        headless=headless,
+                        locale=locale,
+                        progress_callback=None,
+                    )
+                    added = 0
+                    for biz in sub.business_list:
+                        biz.__dict__["source_query"] = q  # tag for later filtering
+                        if biz not in collected:
+                            collected.append(biz)
+                            added += 1
+                    overall_status.write(f"  → {added} new leads")
+                except Exception as exc:
+                    overall_status.write(f"  → ❌ failed: {exc}")
+                    failed.append({"query": q, "error": str(exc)})
+                progress_bar.progress((i + 1) / len(pack))
+            return collected, failed
+
+        biz_list, failed = asyncio.run(run_campaign())
+        elapsed = time.time() - t_start
+        overall_status.update(
+            label=f"✅ Campaign complete — {len(biz_list)} unique leads in {elapsed / 60:.1f} min",
+            state="complete",
+        )
+
+        # Build a BusinessList so the rest of the UI works unchanged
+        from scraper import BusinessList
+        combined = BusinessList()
+        for b in biz_list:
+            combined.add(b)
+        st.session_state.results = combined
+        st.session_state.run_meta = {
+            "elapsed": elapsed,
+            "count": len(biz_list),
+            "pack": pack_name,
+            "failed": failed,
+        }
+        if failed:
+            with st.expander(f"⚠️ {len(failed)} query/queries failed"):
+                for f in failed:
+                    st.write(f"- **{f['query']}**: {f['error']}")
+        st.success(f"✅ {len(biz_list)} unique leads from {len(pack)} queries")
+        st.rerun()
 
 
 # ---------------------------------------------------------------------------
