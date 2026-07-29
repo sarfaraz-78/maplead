@@ -105,6 +105,22 @@ POPULAR_MODELS: list[dict] = [
 # Config
 # ---------------------------------------------------------------------------
 def get_api_key() -> str:
+    """Return the API key.
+
+    Priority order:
+      1. st.session_state (Streamlit-native, survives reruns in the same session)
+      2. MAPLEAD_OPENAI_API_KEY env var
+      3. Streamlit secrets.toml
+    """
+    try:
+        import streamlit as st
+        if hasattr(st, "session_state") and st.session_state.get("MAPLEAD_OPENAI_API_KEY"):
+            return st.session_state["MAPLEAD_OPENAI_API_KEY"]
+    except Exception:
+        pass
+    env_key = os.environ.get("MAPLEAD_OPENAI_API_KEY", "")
+    if env_key:
+        return env_key
     try:
         import streamlit as st
         v = st.secrets.get("MAPLEAD_OPENAI_API_KEY", "") if hasattr(st, "secrets") else ""
@@ -112,36 +128,55 @@ def get_api_key() -> str:
             return v
     except Exception:
         pass
-    return os.environ.get("MAPLEAD_OPENAI_API_KEY", "")
+    return ""
 
 
 def get_base_url() -> str:
-    # Auto-detect OpenRouter key prefix
-    key = get_api_key()
-    base = os.environ.get("MAPLEAD_OPENAI_BASE_URL", "")
-    if not base:
-        try:
-            import streamlit as st
-            base = st.secrets.get("MAPLEAD_OPENAI_BASE_URL", "") if hasattr(st, "secrets") else ""
-        except Exception:
-            base = ""
-    if not base:
-        # If key looks like OpenRouter (sk-or-v1-...), default to OpenRouter
-        if key.startswith("sk-or-"):
-            return DEFAULT_BASE_URL
-        return "https://api.openai.com/v1"
-    return base
+    """Return the API base URL. Defaults to OpenRouter for sk-or-* keys."""
+    # 1. session state
+    try:
+        import streamlit as st
+        if hasattr(st, "session_state") and st.session_state.get("MAPLEAD_OPENAI_BASE_URL"):
+            return st.session_state["MAPLEAD_OPENAI_BASE_URL"]
+    except Exception:
+        pass
+    # 2. env var
+    env = os.environ.get("MAPLEAD_OPENAI_BASE_URL", "")
+    if env:
+        return env
+    # 3. secrets
+    try:
+        import streamlit as st
+        v = st.secrets.get("MAPLEAD_OPENAI_BASE_URL", "") if hasattr(st, "secrets") else ""
+        if v:
+            return v
+    except Exception:
+        pass
+    # 4. Default based on key prefix
+    if get_api_key().startswith("sk-or-"):
+        return DEFAULT_BASE_URL
+    return "https://api.openai.com/v1"
 
 
 def get_model() -> str:
-    m = os.environ.get("MAPLEAD_OPENAI_MODEL", "")
-    if not m:
-        try:
-            import streamlit as st
-            m = st.secrets.get("MAPLEAD_OPENAI_MODEL", "") if hasattr(st, "secrets") else ""
-        except Exception:
-            m = ""
-    return m or DEFAULT_MODEL
+    """Return the active model id."""
+    try:
+        import streamlit as st
+        if hasattr(st, "session_state") and st.session_state.get("MAPLEAD_OPENAI_MODEL"):
+            return st.session_state["MAPLEAD_OPENAI_MODEL"]
+    except Exception:
+        pass
+    env = os.environ.get("MAPLEAD_OPENAI_MODEL", "")
+    if env:
+        return env
+    try:
+        import streamlit as st
+        v = st.secrets.get("MAPLEAD_OPENAI_MODEL", "") if hasattr(st, "secrets") else ""
+        if v:
+            return v
+    except Exception:
+        pass
+    return DEFAULT_MODEL
 
 
 def is_configured() -> bool:

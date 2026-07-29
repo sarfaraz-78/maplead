@@ -1462,6 +1462,8 @@ elif page == PAGE_SETTINGS:
         if st.button("🎯 OpenRouter (Claude 3.5 Sonnet)", use_container_width=True,
                      help="Best quality for cold outreach drafting"):
             import os as _os
+            st.session_state["MAPLEAD_OPENAI_BASE_URL"] = "https://openrouter.ai/api/v1"
+            st.session_state["MAPLEAD_OPENAI_MODEL"] = "anthropic/claude-3.5-sonnet"
             _os.environ["MAPLEAD_OPENAI_BASE_URL"] = "https://openrouter.ai/api/v1"
             _os.environ["MAPLEAD_OPENAI_MODEL"] = "anthropic/claude-3.5-sonnet"
             st.success("Preset applied")
@@ -1470,6 +1472,8 @@ elif page == PAGE_SETTINGS:
         if st.button("⚡ OpenRouter (GPT-4o mini)", use_container_width=True,
                      help="Best value for bulk scoring 1000s of leads"):
             import os as _os
+            st.session_state["MAPLEAD_OPENAI_BASE_URL"] = "https://openrouter.ai/api/v1"
+            st.session_state["MAPLEAD_OPENAI_MODEL"] = "openai/gpt-4o-mini"
             _os.environ["MAPLEAD_OPENAI_BASE_URL"] = "https://openrouter.ai/api/v1"
             _os.environ["MAPLEAD_OPENAI_MODEL"] = "openai/gpt-4o-mini"
             st.success("Preset applied")
@@ -1478,6 +1482,8 @@ elif page == PAGE_SETTINGS:
         if st.button("🆓 OpenRouter (Llama 3.2 free)", use_container_width=True,
                      help="Free tier via OpenRouter — slower but no cost"):
             import os as _os
+            st.session_state["MAPLEAD_OPENAI_BASE_URL"] = "https://openrouter.ai/api/v1"
+            st.session_state["MAPLEAD_OPENAI_MODEL"] = "meta-llama/llama-3.2-3b-instruct:free"
             _os.environ["MAPLEAD_OPENAI_BASE_URL"] = "https://openrouter.ai/api/v1"
             _os.environ["MAPLEAD_OPENAI_MODEL"] = "meta-llama/llama-3.2-3b-instruct:free"
             st.success("Preset applied")
@@ -1518,13 +1524,18 @@ elif page == PAGE_SETTINGS:
         submitted = st.form_submit_button("Save for this session")
         if submitted:
             import os as _os
+            # Save to BOTH st.session_state (survives reruns in session)
+            # AND os.environ (survives subprocess restarts).
             if new_key:
+                st.session_state["MAPLEAD_OPENAI_API_KEY"] = new_key
                 _os.environ["MAPLEAD_OPENAI_API_KEY"] = new_key
             if new_url:
+                st.session_state["MAPLEAD_OPENAI_BASE_URL"] = new_url
                 _os.environ["MAPLEAD_OPENAI_BASE_URL"] = new_url
             if new_model:
+                st.session_state["MAPLEAD_OPENAI_MODEL"] = new_model
                 _os.environ["MAPLEAD_OPENAI_MODEL"] = new_model
-            st.success("Saved. Re-open Database page to test.")
+            st.success("Saved for this session. Re-open Campaign Strategist.")
             st.rerun()
 
     # ---- Bulk AI scoring
@@ -1571,15 +1582,50 @@ elif page == PAGE_SETTINGS:
     # ---- Campaign strategist
     st.divider()
     st.markdown("### 🎯 Campaign strategist")
+
+    # Status indicator (top of section so the user always sees it)
     if ai_mod.is_configured():
-        st.caption("Tell the AI your city + industry — get 5+ smart Google Maps queries to run.")
-    else:
-        st.caption(
-            "Tell us your city + industry — get curated Google Maps queries. "
-            "🔑 No AI key yet? You still get smart built-in suggestions, but for "
-            "city-specific AI-powered recommendations, add an OpenRouter key in the "
-            "form above."
+        masked = ai_mod.get_api_key()[:8] + "..." + ai_mod.get_api_key()[-4:]
+        st.success(
+            f"✅ AI ready — key `{masked}` on `{ai_mod.get_model()}`"
         )
+    else:
+        st.warning("⚠️ AI not configured — using built-in curated suggestions.")
+        with st.expander("🔑 Set your OpenRouter key here (no need to scroll up)", expanded=True):
+            st.markdown(
+                "[Get a free OpenRouter key →](https://openrouter.ai/keys)  "
+                "(free tier available, no card required)"
+            )
+            with st.form("inline_key_form"):
+                inline_key = st.text_input(
+                    "OpenRouter key",
+                    type="password",
+                    placeholder="sk-or-v1-...",
+                    help="Starts with sk-or-v1-. Will only be stored for this session.",
+                )
+                inline_model = st.selectbox(
+                    "Model",
+                    options=[m["id"] for m in ai_mod.POPULAR_MODELS],
+                    index=1,  # GPT-4o mini is sensible default
+                    format_func=lambda x: next(
+                        (f"{m['label']} (${m['input']}/${m['output']} per 1M)"
+                         for m in ai_mod.POPULAR_MODELS if m["id"] == x),
+                        x,
+                    ),
+                )
+                inline_submitted = st.form_submit_button("Save key & enable AI",
+                                                        type="primary")
+                if inline_submitted and inline_key:
+                    import os as _os
+                    st.session_state["MAPLEAD_OPENAI_API_KEY"] = inline_key
+                    st.session_state["MAPLEAD_OPENAI_BASE_URL"] = "https://openrouter.ai/api/v1"
+                    st.session_state["MAPLEAD_OPENAI_MODEL"] = inline_model
+                    _os.environ["MAPLEAD_OPENAI_API_KEY"] = inline_key
+                    _os.environ["MAPLEAD_OPENAI_BASE_URL"] = "https://openrouter.ai/api/v1"
+                    _os.environ["MAPLEAD_OPENAI_MODEL"] = inline_model
+                    st.success("✅ Key saved — click ✨ Suggest best queries again")
+                    st.rerun()
+
     cs1, cs2 = st.columns(2)
     with cs1:
         cs_city = st.text_input("City", value="Hyderabad", key="strat_city")
@@ -1587,16 +1633,16 @@ elif page == PAGE_SETTINGS:
         cs_industry = st.text_input("Industry / category", value="signage",
                                     key="strat_industry",
                                     help="e.g. 'restaurants', 'signage', 'jewellery shops'")
-    col_btn1, col_btn2 = st.columns([2, 1])
+    col_btn1, col_btn2 = st.columns([3, 1])
     with col_btn1:
         run_strat = st.button("✨ Suggest best queries", use_container_width=True,
                               type="primary")
     with col_btn2:
         if not ai_mod.is_configured():
-            st.link_button("🔑 Add OpenRouter key",
+            st.link_button("🔑 Get key",
                            "https://openrouter.ai/keys",
                            use_container_width=True,
-                           help="Get a free OpenRouter account, then paste the key in the form above")
+                           help="Free OpenRouter account, no card needed")
     if run_strat:
         with st.spinner("Thinking…"):
             result = ai_mod.suggest_queries(cs_city, cs_industry)
