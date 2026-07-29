@@ -581,6 +581,7 @@ if page == PAGE_SCRAPE:
                 st.session_state.run_meta = {
                     "elapsed": elapsed,
                     "count": len(biz_list.business_list) if biz_list else 0,
+                    "source": search_term.strip(),
                 }
                 st.success(
                     f"✅ Found {len(biz_list.business_list) if biz_list else 0} businesses in {elapsed:.1f}s"
@@ -912,180 +913,275 @@ elif page == PAGE_DB:
 
     st.markdown("## 🗄️ Lead Database")
     st.caption(
-        "Every scraped lead is auto-saved here. Filter, edit status, add notes, "
-        "log calls \u2014 data survives browser restarts."
+        "Each scrape creates its own table — leads from different campaigns never mix. "
+        "Pick a source below to view, search, and edit."
     )
 
     db = get_db()
-    s = db.stats()
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Total leads", s["total"])
-    c2.metric("With phone", s["with_phone"], f"{s['with_phone'] * 100 // max(s['total'], 1)}%")
-    c3.metric("Last 7 days", s["recent_7d"])
-    c4.metric("New (uncontacted)", s["by_status"].get("New", 0))
-    st.divider()
+    sources = db.list_sources()
 
-    st.markdown("### 🔍 Filter")
-    f1, f2, f3, f4 = st.columns(4)
-    with f1:
-        f_status = st.multiselect("Status", STATUSES, default=["New"])
-    with f2:
-        f_source = st.text_input("Source contains", placeholder="e.g. Hyderabad")
-    with f3:
-        f_search = st.text_input("Search name/phone/address", placeholder="")
-    with f4:
-        f_min_rating = st.number_input("Min \u2605 rating", 0.0, 5.0, 0.0, 0.1)
-    f1b, f2b = st.columns(2)
-    with f1b:
-        f_has_phone = st.selectbox("Has phone?", ["Any", "Yes", "No"], index=0)
-    with f2b:
-        f_order = st.selectbox(
-            "Sort by",
-            ["Last seen (newest)", "Last seen (oldest)", "Rating (high\u2192low)",
-             "Rating (low\u2192high)", "Name (A\u2192Z)", "Times seen"],
-            index=0,
-        )
-    order_map = {
-        "Last seen (newest)": "last_seen DESC",
-        "Last seen (oldest)": "last_seen ASC",
-        "Rating (high\u2192low)": "rating DESC",
-        "Rating (low\u2192high)": "rating ASC",
-        "Name (A\u2192Z)": "name ASC",
-        "Times seen": "times_seen DESC",
-    }
-    has_phone = {"Yes": True, "No": False, "Any": None}[f_has_phone]
-    leads = db.query(
-        status=f_status or None,
-        source=f_source or None,
-        search=f_search or None,
-        has_phone=has_phone,
-        min_rating=f_min_rating if f_min_rating > 0 else None,
-        order_by=order_map[f_order],
-        limit=2000,
-    )
-    st.caption(f"Showing **{len(leads)}** leads")
-
-    if not leads:
-        st.info("No leads match these filters. Scrape some first via 🔍 Scrape, or loosen filters.")
+    # ---- Source picker ----
+    if not sources:
+        st.info("No leads yet. Run a scrape from 🔍 Scrape first.")
     else:
-        st.markdown("### 📋 Results")
-        import pandas as pd
-        rows = []
-        for l in leads:
-            phone_fmt = format_phone_in(l.phone)
-            wa = whatsapp_url(l.phone)
-            rows.append({
-                "id": l.id,
-                "Name": l.name or "",
-                "Category": l.category or "",
-                "Status": l.status,
-                "Phone": phone_fmt or "\u2014",
-                "WA": wa or "",
-                "Rating": (f"{l.rating:.1f}\u2605" + (f" ({l.reviews_count:,})" if l.reviews_count else "")) if l.rating else "",
-                "Address": (l.address or "")[:60],
-                "Source": (l.source_query or "")[:40],
-                "Last seen": l.last_seen,
-            })
-        df = pd.DataFrame(rows)
-        st.dataframe(
-            df,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "id": None,
-                "WA": st.column_config.LinkColumn("WA", display_text="👉 chat", help="Click to open WhatsApp"),
-            },
+        src_names = ["\u2014 ALL sources (combined) \u2014"] + [f"{s.name} ({s.lead_count} leads)" for s in sources]
+        # Persist source selection across reruns
+        if "db_selected_source" not in st.session_state:
+            st.session_state.db_selected_source = src_names[1] if len(src_names) > 1 else src_names[0]
+        # If the previously selected source was deleted, fall back to ALL
+        if st.session_state.db_selected_source not in src_names:
+            st.session_state.db_selected_source = src_names[0]
+        sel = st.selectbox(
+            "Source",
+            options=src_names,
+            key="db_selected_source",
+            help="Each scrape = one table. Pick one to view, or ALL to search across.",
         )
+        is_all = sel.startswith("\u2014")
+        # Extract real source name (strip the '(N leads)' suffix)
+        active_source = None if is_all else sel.rsplit(" (", 1)[0]
 
-        st.markdown("### ⚡ Bulk actions")
-        b1, b2, b3 = st.columns(3)
-        with b1:
-            bulk_status = st.selectbox("Set status to", ["(choose)"] + STATUSES, key="bulk_status_sel")
-            if bulk_status != "(choose)":
-                ids = [l.id for l in leads]
-                if st.button(f"Apply '{bulk_status}' to all {len(ids)} shown", use_container_width=True):
-                    n = db.bulk_set_status(ids, bulk_status)
-                    st.success(f"Updated {n} leads to {bulk_status}")
-                    st.rerun()
-        with b2:
-            bulk_tags = st.text_input("Add tags (comma-separated)", placeholder="hot-lead, follow-up-mon")
-            if st.button("Add tags", use_container_width=True) and bulk_tags.strip():
-                tags = [t.strip() for t in bulk_tags.split(",") if t.strip()]
-                db.add_tags([l.id for l in leads], tags)
-                st.success(f"Tagged {len(leads)} leads with: {tags}")
-                st.rerun()
-        with b3:
-            if st.button(f"🗑 Delete all {len(leads)} shown", type="secondary", use_container_width=True):
-                n = db.delete([l.id for l in leads])
-                st.warning(f"Deleted {n} leads")
-                st.rerun()
+        # ---- Stats for current view ----
+        if is_all:
+            s = db.stats()
+            total_leads = s["total"]
+            with_phone = s["with_phone"]
+        else:
+            leads_in_src = db.query(source=active_source, limit=100000)
+            total_leads = len(leads_in_src)
+            with_phone = sum(1 for l in leads_in_src if l.phone_digits)
 
-        st.markdown("### 🔍 Lead details")
-        lead_id = st.number_input(
-            "Lead ID (from table above)",
-            min_value=0,
-            max_value=10_000_000,
-            value=0,
-            step=1,
-        )
-        if lead_id:
-            lead = db.get(int(lead_id))
-            if lead:
-                with st.expander(f"{lead.name} \u2014 {lead.phone or 'no phone'}", expanded=True):
-                    d1, d2 = st.columns(2)
-                    with d1:
-                        new_status = st.selectbox(
-                            "Status",
-                            STATUSES,
-                            index=STATUSES.index(lead.status) if lead.status in STATUSES else 0,
-                            key=f"st_{lead.id}",
-                        )
-                        new_note = st.text_area("Notes", value=lead.notes or "", key=f"nt_{lead.id}")
-                        if st.button("Save", key=f"sv_{lead.id}"):
-                            db.set_status(lead.id, new_status, new_note)
-                            st.success("Saved")
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Total leads", total_leads)
+        c2.metric("With phone", with_phone, f"{with_phone * 100 // max(total_leads, 1)}%")
+        c3.metric("Sources", len(sources))
+        c4.metric("Active source", "ALL" if is_all else active_source[:25])
+        st.divider()
+
+        # ---- Source management (rename / drop) ----
+        if not is_all:
+            with st.expander("⚙️ Manage this source", expanded=False):
+                mc1, mc2 = st.columns(2)
+                with mc1:
+                    new_name = st.text_input(
+                        "Rename source",
+                        value=active_source,
+                        key=f"rename_{active_source}",
+                    )
+                    if st.button("Rename", key=f"btn_rename_{active_source}") and new_name.strip() and new_name != active_source:
+                        if db.rename_source(active_source, new_name.strip()):
+                            st.success(f"Renamed to '{new_name}'")
+                            st.session_state.db_selected_source = f"{new_name} ({next((x.lead_count for x in db.list_sources() if x.name == new_name), 0)} leads)"
                             st.rerun()
-                    with d2:
-                        st.write(f"**Address:** {lead.address or '\u2014'}")
-                        st.write(f"**Phone:** {format_phone_in(lead.phone) or '\u2014'}")
-                        if lead.website:
-                            st.write(f"**Website:** {lead.website}")
-                        st.write(f"**Rating:** {lead.rating} ({lead.reviews_count or 0} reviews)")
-                        st.write(f"**Sources:** {lead.source_query or '\u2014'}")
-                        st.write(f"**Backend(s):** {lead.backend or '\u2014'}")
-                        st.write(f"**Tags:** {lead.tags or '\u2014'}")
-                        st.write(f"**First seen:** {lead.first_seen}")
-                        st.write(f"**Last seen:** {lead.last_seen} (seen {lead.times_seen}x)")
-                        if lead.google_maps_url:
-                            st.markdown(f"[Open in Google Maps]({lead.google_maps_url})")
-                    st.markdown("**Contact log:**")
-                    contacts = db.contacts_for(lead.id)
-                    if contacts:
-                        for c in contacts:
-                            st.write(f"- **{c['occurred_at']}** ({c['kind']}): {c['summary']}")
+                        else:
+                            st.error("Rename failed (duplicate name?)")
+                with mc2:
+                    confirm = st.checkbox(f"Yes, delete all {total_leads} leads", key=f"confirm_drop_{active_source}")
+                    if st.button("🗑 Drop this source", type="secondary", disabled=not confirm, key=f"btn_drop_{active_source}"):
+                        n = db.drop_source(active_source)
+                        st.warning(f"Deleted {n} leads and dropped table for '{active_source}'")
+                        st.session_state.db_selected_source = "\u2014 ALL sources (combined) \u2014"
+                        st.rerun()
+
+        # ---- Filters ----
+        st.markdown("### 🔍 Filter")
+        f1, f2, f3, f4 = st.columns(4)
+        with f1:
+            f_status = st.multiselect("Status", STATUSES, default=["New"])
+        with f2:
+            f_search = st.text_input("Search name/phone/address", placeholder="")
+        with f3:
+            f_min_rating = st.number_input("Min ★ rating", 0.0, 5.0, 0.0, 0.1)
+        with f4:
+            f_order = st.selectbox(
+                "Sort by",
+                ["Last seen (newest)", "Last seen (oldest)", "Rating (high→low)",
+                 "Rating (low→high)", "Name (A→Z)", "Times seen"],
+                index=0,
+                key="db_order",
+            )
+        order_map = {
+            "Last seen (newest)": "last_seen DESC",
+            "Last seen (oldest)": "last_seen ASC",
+            "Rating (high→low)": "rating DESC",
+            "Rating (low→high)": "rating ASC",
+            "Name (A→Z)": "name ASC",
+            "Times seen": "times_seen DESC",
+        }
+        f_has_phone = st.selectbox("Has phone?", ["Any", "Yes", "No"], index=0, key="db_has_phone")
+        has_phone = {"Yes": True, "No": False, "Any": None}[f_has_phone]
+
+        common = dict(
+            status=f_status or None,
+            search=f_search or None,
+            has_phone=has_phone,
+            min_rating=f_min_rating if f_min_rating > 0 else None,
+            order_by=order_map[f_order],
+            limit=2000,
+        )
+        if is_all:
+            leads = db.query_all(**common)
+        else:
+            leads = db.query(source=active_source, **common)
+        st.caption(f"Showing **{len(leads)}** leads" + ("" if is_all else f" from '{active_source}'"))
+
+        if not leads:
+            st.info("No leads match these filters.")
+            leads = []
+        else:
+            st.markdown("### 📋 Results")
+            import pandas as pd
+            rows = []
+            for l in leads:
+                phone_fmt = format_phone_in(l.phone)
+                wa = whatsapp_url(l.phone)
+                rating_str = ""
+                if l.rating:
+                    rating_str = f"{l.rating:.1f}★"
+                    if l.reviews_count:
+                        rating_str += f" ({l.reviews_count:,})"
+                rows.append({
+                    "id": l.id,
+                    "Name": l.name or "",
+                    "Category": l.category or "",
+                    "Status": l.status,
+                    "Phone": phone_fmt or "—",
+                    "WA": wa or "",
+                    "Rating": rating_str,
+                    "Address": (l.address or "")[:60],
+                    "Source": l.source or "",
+                    "Last seen": l.last_seen,
+                })
+            df = pd.DataFrame(rows)
+            st.dataframe(
+                df,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "id": None,
+                    "WA": st.column_config.LinkColumn("WA", display_text="👉 chat", help="Click to open WhatsApp"),
+                },
+            )
+
+            st.markdown("### ⚡ Bulk actions")
+            b1, b2 = st.columns(2)
+            with b1:
+                bulk_status = st.selectbox("Set status to", ["(choose)"] + STATUSES, key="bulk_status_sel")
+                if bulk_status != "(choose)":
+                    if st.button(
+                        f"Apply '{bulk_status}' to all {len(leads)} shown",
+                        use_container_width=True,
+                        key="btn_apply_bulk",
+                    ):
+                        if is_all:
+                            n = 0
+                            seen_keys = set()
+                            for l in leads:
+                                k = (l.source, l.id)
+                                if k in seen_keys:
+                                    continue
+                                seen_keys.add(k)
+                                n += db.bulk_set_status([l.id], l.source, bulk_status)
+                            st.success(f"Updated {n} leads")
+                        else:
+                            n = db.bulk_set_status([l.id for l in leads], active_source, bulk_status)
+                            st.success(f"Updated {n} leads")
+                        st.rerun()
+            with b2:
+                if st.button(
+                    f"🗑 Delete {len(leads)} shown leads",
+                    type="secondary",
+                    use_container_width=True,
+                    key="btn_delete_shown",
+                ):
+                    if is_all:
+                        n = 0
+                        for l in leads:
+                            n += db.delete([l.id], l.source)
                     else:
-                        st.caption("No contacts logged yet.")
-                    bc1, bc2, bc3, bc4 = st.columns(4)
-                    kinds = ["call", "whatsapp", "email", "meeting"]
-                    for col, kind in zip((bc1, bc2, bc3, bc4), kinds):
-                        with col:
-                            if st.button(f"+ {kind}", key=f"lg_{lead.id}_{kind}"):
-                                db.add_contact(lead.id, kind, f"Logged from {kind} button")
+                        n = db.delete([l.id for l in leads], active_source)
+                    st.warning(f"Deleted {n} leads")
+                    st.rerun()
+
+            st.markdown("### 🔍 Lead details")
+            lead_id = st.number_input(
+                "Lead ID (from table above)",
+                min_value=0,
+                max_value=10_000_000,
+                value=0,
+                step=1,
+                key="db_lead_id_input",
+            )
+            # Determine which source to fetch from
+            detail_source = active_source
+            if lead_id and is_all:
+                # Find which source the lead belongs to by looking at displayed rows
+                match = next((l for l in leads if l.id == int(lead_id)), None)
+                if match:
+                    detail_source = match.source
+            if lead_id:
+                lead = db.get(int(lead_id), detail_source or "(none)")
+                if lead:
+                    with st.expander(f"{lead.name} — {lead.phone or 'no phone'}", expanded=True):
+                        d1, d2 = st.columns(2)
+                        with d1:
+                            new_status = st.selectbox(
+                                "Status",
+                                STATUSES,
+                                index=STATUSES.index(lead.status) if lead.status in STATUSES else 0,
+                                key=f"st_{lead.source}_{lead.id}",
+                            )
+                            new_note = st.text_area("Notes", value=lead.notes or "", key=f"nt_{lead.source}_{lead.id}")
+                            if st.button("Save", key=f"sv_{lead.source}_{lead.id}"):
+                                db.set_status(lead.id, new_status, lead.source, new_note)
+                                st.success("Saved")
                                 st.rerun()
-            else:
-                st.warning(f"No lead with id={lead_id}")
+                        with d2:
+                            st.write(f"**Source:** {lead.source}")
+                            st.write(f"**Address:** {lead.address or '—'}")
+                            st.write(f"**Phone:** {format_phone_in(lead.phone) or '—'}")
+                            if lead.website:
+                                st.write(f"**Website:** {lead.website}")
+                            st.write(f"**Rating:** {lead.rating} ({lead.reviews_count or 0} reviews)")
+                            st.write(f"**Backend:** {lead.backend or '—'}")
+                            st.write(f"**First seen:** {lead.first_seen}")
+                            st.write(f"**Last seen:** {lead.last_seen} (seen {lead.times_seen}x)")
+                            if lead.google_maps_url:
+                                st.markdown(f"[Open in Google Maps]({lead.google_maps_url})")
+                        st.markdown("**Contact log:**")
+                        contacts = db.contacts_for(lead.id, lead.source)
+                        if contacts:
+                            for c in contacts:
+                                st.write(f"- **{c['occurred_at']}** ({c['kind']}): {c['summary']}")
+                        else:
+                            st.caption("No contacts logged yet.")
+                        bc1, bc2, bc3, bc4 = st.columns(4)
+                        kinds = ["call", "whatsapp", "email", "meeting"]
+                        for col, kind in zip((bc1, bc2, bc3, bc4), kinds):
+                            with col:
+                                if st.button(f"+ {kind}", key=f"lg_{lead.source}_{lead.id}_{kind}"):
+                                    db.add_contact(lead.id, lead.source, kind, f"Logged from {kind} button")
+                                    st.rerun()
+                else:
+                    st.warning(f"No lead with id={lead_id} in source '{detail_source}'")
 
         st.divider()
-        st.markdown("### 📤 Export full database")
+        st.markdown("### 📤 Export")
         col1, col2 = st.columns(2)
         with col1:
-            csv = db.export_to_csv_bytes()
+            if is_all:
+                csv = db.export_all_csv()
+                fn = f"maplead_all_sources_{datetime.now().strftime('%Y-%m-%d')}.csv"
+            else:
+                csv = db.export_source_csv(active_source)
+                fn = make_filename(active_source, "", "", "csv", len(leads))
             st.download_button(
-                "📊 Export all leads as CSV",
+                "📊 Export current view as CSV",
                 data=csv,
-                file_name=f"maplead_db_{datetime.now().strftime('%Y-%m-%d')}.csv",
+                file_name=fn,
                 mime="text/csv",
                 use_container_width=True,
+                key="btn_export_csv",
             )
         with col2:
             stats_bytes = json.dumps(db.stats(), indent=2, default=str).encode()
@@ -1095,6 +1191,7 @@ elif page == PAGE_DB:
                 file_name=f"maplead_stats_{datetime.now().strftime('%Y-%m-%d')}.json",
                 mime="application/json",
                 use_container_width=True,
+                key="btn_export_stats",
             )
 
 
@@ -1107,34 +1204,45 @@ elif page == PAGE_STATS:
     st.markdown("## 📊 Lead Database Stats")
     db = get_db()
     s = db.stats()
+    sources = db.list_sources()
 
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Total leads", s["total"])
     m2.metric("With phone", s["with_phone"])
-    m3.metric("Last 7 days", s["recent_7d"])
+    m3.metric("Sources", len(sources))
     won = s["by_status"].get("Won", 0)
     conversion = (won * 100 // s["total"]) if s["total"] else 0
     m4.metric("Conversion rate", f"{conversion}%", f"{won} won")
 
     st.divider()
-    st.markdown("### Pipeline status")
+    st.markdown("### Pipeline status (all sources combined)")
     cols = st.columns(len(STATUSES))
     for col, s_name in zip(cols, STATUSES):
         n = s["by_status"].get(s_name, 0)
         col.metric(s_name, n)
 
     st.divider()
-    st.markdown("### Leads by source query")
-    if s["by_source"]:
+    st.markdown("### Sources")
+    if sources:
         import pandas as pd
-        df = pd.DataFrame(s["by_source"]).rename(columns={"src": "Source", "n": "Leads"})
-        st.bar_chart(df.set_index("Source"))
+        df = pd.DataFrame([
+            {
+                "Source": x.name,
+                "Leads": x.lead_count,
+                "Backend": x.backend or "—",
+                "Last used": x.last_used_at,
+                "Created": x.created_at,
+            }
+            for x in sources
+        ])
+        st.dataframe(df, use_container_width=True, hide_index=True)
+        st.bar_chart(df.set_index("Source")["Leads"])
     else:
-        st.caption("No leads in the database yet.")
+        st.caption("No sources yet. Run a scrape to create the first one.")
 
     st.divider()
-    st.markdown("### Recent activity")
-    recent = db.query(limit=20, order_by="last_seen DESC")
+    st.markdown("### Recent activity (across all sources)")
+    recent = db.query_all(limit=20)
     if recent:
         import pandas as pd
         df = pd.DataFrame([
@@ -1142,7 +1250,7 @@ elif page == PAGE_STATS:
                 "Name": l.name or "",
                 "Status": l.status,
                 "Phone": l.phone or "",
-                "Source": (l.source_query or "")[:40],
+                "Source": (l.source or "")[:40],
                 "Last seen": l.last_seen,
             }
             for l in recent

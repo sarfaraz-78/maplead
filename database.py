@@ -1,29 +1,36 @@
 """
-MapLead — Persistent lead database (SQLite)
-===========================================
+MapLead — Persistent lead database, one table per source
+=======================================================
 
-A real database behind MapLead so scraped leads survive browser restarts,
-status updates are saved, and you can build a history of every campaign.
+Each scrape (or campaign) gets its own SQLite table named after the
+source query, so leads from different campaigns never mix.
 
 Schema
 ------
-leads
-    id, lead_key (unique), name, address, phone, phone_digits,
-    category, website, rating, reviews_count, latitude, longitude,
-    google_maps_url, source_query, backend, status, notes, tags,
-    first_seen, last_seen, times_seen
+sources
+    registry of all known source tables \u2014 one row per scrape.
+    Lets us list, rename, and drop sources without scanning the schema.
 
-contacts
-    id, lead_id (FK), kind (call/email/whatsapp/meeting), summary,
-    occurred_at
+leads_<slug>          one table per source, identical schema:
+    id, name, address, phone, phone_digits, category, website,
+    rating, reviews_count, latitude, longitude, google_maps_url,
+    backend, status, notes, first_seen, last_seen, times_seen,
+    UNIQUE(phone_digits) within the source
+
+contacts_<slug>       one contact-log table per source, FK to leads
+
+If the user scrapes without a `source_query` (e.g. an ad-hoc search),
+leads go to `leads__default`.
 
 Usage
 -----
-    db = LeadDB()                         # opens ./maplead.db
+    db = LeadDB()
     db.upsert_many(businesses, source="restaurants in Hyderabad", backend="botasaurus")
-    leads = db.query(status="New", source="cafes in Hyderabad")
-    db.set_status(lead_id=42, status="Contacted", note="Will call back Mon")
-    db.add_contact(lead_id=42, kind="call", summary="Spoke with manager")
+    db.list_sources()                         # all known sources + counts
+    leads = db.query(source="restaurants in Hyderabad", status="New")
+    leads = db.query_all(status="New")        # search across all sources
+    db.set_status(lead_id=42, status="Contacted", source="restaurants in Hyderabad")
+    db.drop_source("hotels in Hyderabad")     # nuke one source completely
 """
 
 from __future__ import annotations
@@ -40,6 +47,8 @@ from scraper import Business
 
 STATUSES: list[str] = ["New", "Contacted", "Interested", "Quoted", "Won", "Lost"]
 
+DEFAULT_SOURCE = "(no source)"
+
 
 def phone_digits(phone: Optional[str]) -> str:
     if not phone:
@@ -47,21 +56,37 @@ def phone_digits(phone: Optional[str]) -> str:
     return re.sub(r"\D", "", phone)
 
 
-def make_lead_key(b: Business) -> str:
-    """Stable per-business key. Phone-based when available (most stable),
-    otherwise a slug from name + address."""
-    d = phone_digits(b.phone_number)
-    if d:
-        return f"phone:{d}"
-    slug = re.sub(r"\s+", " ", f"{(b.name or '').strip().lower()}|{(b.address or '').strip().lower()}")
-    return f"id:{slug}"
+def slugify_source(source: str) -> str:
+    """Convert 'Restaurants in Hyderabad!' -> 'restaurants_in_hyderabad'."""
+    s = re.sub(r"[^a-z0-9]+", "_", (source or "").lower()).strip("_")
+    return s[:60] or "default"
+
+
+def _table_for_source(source: str) -> str:
+    """Compute the leads table name for a given source string."""
+    return f"leads_{slugify_source(source)}"
+
+
+def _contacts_table_for_source(source: str) -> str:
+    return f"contacts_{slugify_source(source)}"
+
+
+@dataclass
+class SourceInfo:
+    id: int
+    name: str
+    table_name: str
+    backend: str
+    created_at: str
+    last_used_at: str
+    lead_count: int
 
 
 @dataclass
 class Lead:
-    """Row from the leads table."""
+    """Row from a leads_<slug> table."""
     id: int
-    lead_key: str
+    source: str
     name: Optional[str]
     address: Optional[str]
     phone: Optional[str]
@@ -73,22 +98,93 @@ class Lead:
     latitude: Optional[float]
     longitude: Optional[float]
     google_maps_url: Optional[str]
-    source_query: Optional[str]
     backend: Optional[str]
     status: str
     notes: Optional[str]
-    tags: Optional[str]
     first_seen: str
     last_seen: str
     times_seen: int
 
 
-def _row_to_lead(row: sqlite3.Row) -> Lead:
-    return Lead(**{k: row[k] for k in row.keys()})
+def _row_to_lead(row: sqlite3.Row, source: str) -> Lead:
+    """Build a Lead, tolerating tables that may be missing newer columns."""
+    keys = set(row.keys())
+    fields = {
+        "id": row["id"],
+        "source": source,
+        "name": row["name"] if "name" in keys else None,
+        "address": row["address"] if "address" in keys else None,
+        "phone": row["phone"] if "phone" in keys else None,
+        "phone_digits": row["phone_digits"] if "phone_digits" in keys else None,
+        "category": row["category"] if "category" in keys else None,
+        "website": row["website"] if "website" in keys else None,
+        "rating": row["rating"] if "rating" in keys else None,
+        "reviews_count": row["reviews_count"] if "reviews_count" in keys else None,
+        "latitude": row["latitude"] if "latitude" in keys else None,
+        "longitude": row["longitude"] if "longitude" in keys else None,
+        "google_maps_url": row["google_maps_url"] if "google_maps_url" in keys else None,
+        "backend": row["backend"] if "backend" in keys else None,
+        "status": row["status"] if "status" in keys else "New",
+        "notes": row["notes"] if "notes" in keys else None,
+        "first_seen": row["first_seen"] if "first_seen" in keys else "",
+        "last_seen": row["last_seen"] if "last_seen" in keys else "",
+        "times_seen": row["times_seen"] if "times_seen" in keys else 1,
+    }
+    return Lead(**fields)
+
+
+# Standard column list used for both CREATE TABLE and INSERT/UPDATE.
+LEAD_COLUMNS = (
+    "name", "address", "phone", "phone_digits", "category",
+    "website", "rating", "reviews_count", "latitude", "longitude",
+    "google_maps_url", "backend",
+    "status", "notes",
+    "first_seen", "last_seen", "times_seen",
+)
+
+
+def _create_leads_table_sql(table: str) -> str:
+    """SQL to create the standard leads table for a source."""
+    return f"""
+        CREATE TABLE IF NOT EXISTS {table} (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            name            TEXT,
+            address         TEXT,
+            phone           TEXT,
+            phone_digits    TEXT,
+            category        TEXT,
+            website         TEXT,
+            rating          REAL,
+            reviews_count   INTEGER,
+            latitude        REAL,
+            longitude       REAL,
+            google_maps_url TEXT,
+            backend         TEXT,
+            status          TEXT NOT NULL DEFAULT 'New',
+            notes           TEXT,
+            first_seen      TEXT NOT NULL,
+            last_seen       TEXT NOT NULL,
+            times_seen      INTEGER NOT NULL DEFAULT 1,
+            UNIQUE(phone_digits)
+        )
+    """
+
+
+def _create_contacts_table_sql(table: str) -> str:
+    return f"""
+        CREATE TABLE IF NOT EXISTS {table} (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            lead_id     INTEGER NOT NULL,
+            kind        TEXT NOT NULL,
+            summary     TEXT,
+            occurred_at TEXT NOT NULL,
+            FOREIGN KEY (lead_id) REFERENCES {table.replace('contacts_', 'leads_')}(id) ON DELETE CASCADE
+        )
+    """
 
 
 class LeadDB:
-    """SQLite-backed lead store. Thread-safe for Streamlit's single-thread usage."""
+    """SQLite-backed lead store. One leads_<slug> table per source query."""
 
     def __init__(self, db_path: str | Path = "maplead.db") -> None:
         self.db_path = Path(db_path)
@@ -99,7 +195,7 @@ class LeadDB:
     def _conn(self):
         c = sqlite3.connect(self.db_path, timeout=10)
         c.row_factory = sqlite3.Row
-        c.execute("PRAGMA journal_mode=WAL")  # better concurrency
+        c.execute("PRAGMA journal_mode=WAL")
         try:
             yield c
             c.commit()
@@ -111,48 +207,126 @@ class LeadDB:
 
     def _init_schema(self) -> None:
         with self._conn() as c:
-            c.executescript(
+            c.execute(
                 """
-                CREATE TABLE IF NOT EXISTS leads (
-                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-                    lead_key        TEXT NOT NULL UNIQUE,
-                    name            TEXT,
-                    address         TEXT,
-                    phone           TEXT,
-                    phone_digits    TEXT,
-                    category        TEXT,
-                    website         TEXT,
-                    rating          REAL,
-                    reviews_count   INTEGER,
-                    latitude        REAL,
-                    longitude       REAL,
-                    google_maps_url TEXT,
-                    source_query    TEXT,
-                    backend         TEXT,
-                    status          TEXT NOT NULL DEFAULT 'New',
-                    notes           TEXT,
-                    tags            TEXT,
-                    first_seen      TEXT NOT NULL,
-                    last_seen       TEXT NOT NULL,
-                    times_seen      INTEGER NOT NULL DEFAULT 1
-                );
-
-                CREATE INDEX IF NOT EXISTS idx_leads_status     ON leads(status);
-                CREATE INDEX IF NOT EXISTS idx_leads_source     ON leads(source_query);
-                CREATE INDEX IF NOT EXISTS idx_leads_last_seen  ON leads(last_seen);
-
-                CREATE TABLE IF NOT EXISTS contacts (
-                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                    lead_id     INTEGER NOT NULL,
-                    kind        TEXT NOT NULL,  -- call, whatsapp, email, meeting, note
-                    summary     TEXT,
-                    occurred_at TEXT NOT NULL,
-                    FOREIGN KEY (lead_id) REFERENCES leads(id) ON DELETE CASCADE
-                );
-
-                CREATE INDEX IF NOT EXISTS idx_contacts_lead ON contacts(lead_id);
+                CREATE TABLE IF NOT EXISTS sources (
+                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name          TEXT NOT NULL,
+                    table_name    TEXT NOT NULL UNIQUE,
+                    backend       TEXT,
+                    created_at    TEXT NOT NULL,
+                    last_used_at  TEXT NOT NULL,
+                    lead_count    INTEGER NOT NULL DEFAULT 0
+                )
                 """
             )
+            c.execute(
+                "CREATE INDEX IF NOT EXISTS idx_sources_name ON sources(name)"
+            )
+
+    # ---------- sources registry ----------
+    def _ensure_source(self, source: str, backend: str = "") -> str:
+        """Register the source if needed. Returns the table name."""
+        source = (source or "").strip() or DEFAULT_SOURCE
+        table = _table_for_source(source)
+        with self._conn() as c:
+            existing = c.execute(
+                "SELECT id FROM sources WHERE table_name = ?", (table,)
+            ).fetchone()
+            now = datetime.now().isoformat(timespec="seconds")
+            if existing is None:
+                c.execute(
+                    """INSERT INTO sources (name, table_name, backend, created_at, last_used_at)
+                       VALUES (?, ?, ?, ?, ?)""",
+                    (source, table, backend or None, now, now),
+                )
+            else:
+                c.execute(
+                    "UPDATE sources SET last_used_at = ? WHERE id = ?",
+                    (now, existing["id"]),
+                )
+            # Create the leads + contacts tables for this source
+            c.execute(_create_leads_table_sql(table))
+            c.execute(_create_contacts_table_sql(_contacts_table_for_source(source)))
+        return table
+
+    def list_sources(self) -> list[SourceInfo]:
+        """Return all known sources, freshest first."""
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT * FROM sources ORDER BY last_used_at DESC"
+            ).fetchall()
+        # Recompute live lead_count (cheaper than maintaining it on every write)
+        out = []
+        for r in rows:
+            count = c.execute(
+                f"SELECT COUNT(*) AS n FROM {r['table_name']}"
+            ).fetchone()["n"] if False else 0  # placeholder, see below
+            try:
+                with self._conn() as c2:
+                    count = c2.execute(
+                        f"SELECT COUNT(*) AS n FROM {r['table_name']}"
+                    ).fetchone()["n"]
+            except sqlite3.OperationalError:
+                count = 0  # table missing
+            out.append(SourceInfo(
+                id=r["id"],
+                name=r["name"],
+                table_name=r["table_name"],
+                backend=r["backend"] or "",
+                created_at=r["created_at"],
+                last_used_at=r["last_used_at"],
+                lead_count=count,
+            ))
+        return out
+
+    def drop_source(self, source: str) -> int:
+        """Delete all leads and the table for one source. Returns count deleted."""
+        table = _table_for_source(source)
+        contacts = _contacts_table_for_source(source)
+        with self._conn() as c:
+            try:
+                count = c.execute(f"SELECT COUNT(*) AS n FROM {table}").fetchone()["n"]
+            except sqlite3.OperationalError:
+                count = 0
+            c.execute(f"DROP TABLE IF EXISTS {table}")
+            c.execute(f"DROP TABLE IF EXISTS {contacts}")
+            c.execute("DELETE FROM sources WHERE table_name = ?", (table,))
+        return count
+
+    def rename_source(self, old: str, new: str) -> bool:
+        """Rename a source. Migrates all data to the new table. Returns success."""
+        old = (old or "").strip()
+        new = (new or "").strip()
+        if not old or not new or old == new:
+            return False
+        old_table = _table_for_source(old)
+        new_table = _table_for_source(new)
+        if old_table == new_table:
+            # Only the display name differs \u2014 update sources registry
+            with self._conn() as c:
+                c.execute("UPDATE sources SET name = ? WHERE table_name = ?",
+                          (new, old_table))
+            return True
+        # Move data
+        with self._conn() as c:
+            try:
+                c.execute(f"SELECT COUNT(*) AS n FROM {old_table}").fetchone()
+            except sqlite3.OperationalError:
+                return False
+            c.execute(f"ALTER TABLE {old_table} RENAME TO {new_table}")
+            # Contacts table: rename too if it exists
+            old_contacts = _contacts_table_for_source(old)
+            new_contacts = _contacts_table_for_source(new)
+            try:
+                c.execute(f"ALTER TABLE {old_contacts} RENAME TO {new_contacts}")
+            except sqlite3.OperationalError:
+                pass  # no contacts table yet
+            c.execute(
+                "UPDATE sources SET name = ?, table_name = ?, last_used_at = ? WHERE table_name = ?",
+                (new, new_table, datetime.now().isoformat(timespec="seconds"), old_table),
+            )
+        return True
 
     # ---------- ingest ----------
     def upsert_many(
@@ -162,76 +336,68 @@ class LeadDB:
         source_query: str = "",
         backend: str = "",
     ) -> dict[str, int]:
-        """Insert or update many leads. Returns counts of inserted/updated/unchanged."""
+        """Insert/update many leads into the table for `source_query`."""
+        table = self._ensure_source(source_query, backend)
         now = datetime.now().isoformat(timespec="seconds")
         inserted = updated = unchanged = 0
         with self._conn() as c:
             for b in businesses:
-                key = make_lead_key(b)
-                existing = c.execute(
-                    "SELECT id, source_query, backend, times_seen FROM leads WHERE lead_key = ?",
-                    (key,),
-                ).fetchone()
+                pdig = phone_digits(b.phone_number) or None
+                # Try to find existing by phone within this source
+                existing = None
+                if pdig:
+                    existing = c.execute(
+                        f"SELECT id, times_seen FROM {table} WHERE phone_digits = ?",
+                        (pdig,),
+                    ).fetchone()
                 if existing is None:
-                    c.execute(
-                        """
-                        INSERT INTO leads (
-                            lead_key, name, address, phone, phone_digits, category,
-                            website, rating, reviews_count, latitude, longitude,
-                            google_maps_url, source_query, backend,
-                            status, notes, tags, first_seen, last_seen, times_seen
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
-                        """,
-                        (
-                            key, b.name, b.address, b.phone_number,
-                            phone_digits(b.phone_number) or None,
-                            b.category, b.website, b.reviews_average, b.reviews_count,
-                            b.latitude, b.longitude, b.google_maps_url,
-                            source_query or None, backend or None,
-                            "New", None, None, now, now,
-                        ),
-                    )
-                    inserted += 1
+                    # New lead
+                    try:
+                        c.execute(
+                            f"""INSERT INTO {table} (
+                                name, address, phone, phone_digits, category,
+                                website, rating, reviews_count, latitude, longitude,
+                                google_maps_url, backend,
+                                status, notes, first_seen, last_seen, times_seen
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'New', NULL, ?, ?, 1)""",
+                            (
+                                b.name, b.address, b.phone_number, pdig,
+                                b.category, b.website, b.reviews_average, b.reviews_count,
+                                b.latitude, b.longitude, b.google_maps_url, backend or None,
+                                now, now,
+                            ),
+                        )
+                        inserted += 1
+                    except sqlite3.IntegrityError:
+                        # Race: someone inserted the same phone_digits between
+                        # SELECT and INSERT. Treat as unchanged.
+                        unchanged += 1
                 else:
-                    # Update fields, append source_query if new
-                    sources = (existing["source_query"] or "")
-                    new_sources = sources
-                    if source_query and source_query not in sources:
-                        new_sources = f"{sources};{source_query}" if sources else source_query
-                    backends = (existing["backend"] or "")
-                    new_backends = backends
-                    if backend and backend not in backends:
-                        new_backends = f"{backends};{backend}" if backends else backend
                     c.execute(
-                        """
-                        UPDATE leads SET
-                            name=?, address=?, phone=?, phone_digits=?, category=?,
+                        f"""UPDATE {table} SET
+                            name=?, address=?, phone=?, category=?,
                             website=?, rating=?, reviews_count=?, latitude=?, longitude=?,
-                            google_maps_url=?, source_query=?, backend=?,
-                            last_seen=?, times_seen=times_seen+1
-                        WHERE lead_key=?
-                        """,
+                            google_maps_url=?, backend=?, last_seen=?, times_seen=times_seen+1
+                        WHERE id=?""",
                         (
-                            b.name, b.address, b.phone_number,
-                            phone_digits(b.phone_number) or None,
-                            b.category, b.website, b.reviews_average, b.reviews_count,
-                            b.latitude, b.longitude, b.google_maps_url,
-                            new_sources, new_backends, now, key,
+                            b.name, b.address, b.phone_number, b.category,
+                            b.website, b.reviews_average, b.reviews_count,
+                            b.latitude, b.longitude, b.google_maps_url, backend or None,
+                            now, existing["id"],
                         ),
                     )
-                    # Check if anything actually changed
                     if c.execute("SELECT changes()").fetchone()[0]:
                         updated += 1
                     else:
                         unchanged += 1
-        return {"inserted": inserted, "updated": updated, "unchanged": unchanged}
+        return {"inserted": inserted, "updated": updated, "unchanged": unchanged, "source": source_query or DEFAULT_SOURCE}
 
     # ---------- read ----------
     def query(
         self,
         *,
+        source: str,
         status: Optional[list[str] | str] = None,
-        source: Optional[str] = None,
         search: Optional[str] = None,
         has_phone: Optional[bool] = None,
         min_rating: Optional[float] = None,
@@ -240,7 +406,8 @@ class LeadDB:
         limit: int = 1000,
         order_by: str = "last_seen DESC",
     ) -> list[Lead]:
-        """Flexible search. All filters are optional and AND-combined."""
+        """Search within a single source's table."""
+        table = _table_for_source(source)
         where: list[str] = []
         params: list = []
         if status:
@@ -249,9 +416,6 @@ class LeadDB:
             placeholders = ",".join("?" for _ in status)
             where.append(f"status IN ({placeholders})")
             params.extend(status)
-        if source:
-            where.append("source_query LIKE ?")
-            params.append(f"%{source}%")
         if search:
             where.append("(name LIKE ? OR address LIKE ? OR phone LIKE ? OR category LIKE ?)")
             s = f"%{search}%"
@@ -269,135 +433,191 @@ class LeadDB:
         if until:
             where.append("last_seen <= ?")
             params.append(until)
-
-        sql = "SELECT * FROM leads"
-        if where:
-            sql += " WHERE " + " AND ".join(where)
-        # Whitelist order_by columns to prevent SQL injection
         allowed = {"last_seen DESC", "last_seen ASC", "rating DESC", "rating ASC",
                    "name ASC", "name DESC", "first_seen DESC", "times_seen DESC"}
         if order_by not in allowed:
             order_by = "last_seen DESC"
+        sql = f"SELECT * FROM {table}"
+        if where:
+            sql += " WHERE " + " AND ".join(where)
         sql += f" ORDER BY {order_by} LIMIT ?"
         params.append(limit)
         with self._conn() as c:
-            rows = c.execute(sql, params).fetchall()
-        return [_row_to_lead(r) for r in rows]
+            try:
+                rows = c.execute(sql, params).fetchall()
+            except sqlite3.OperationalError:
+                return []
+        return [_row_to_lead(r, source) for r in rows]
 
-    def get(self, lead_id: int) -> Optional[Lead]:
+    def query_all(
+        self,
+        *,
+        status: Optional[list[str] | str] = None,
+        search: Optional[str] = None,
+        has_phone: Optional[bool] = None,
+        min_rating: Optional[float] = None,
+        limit: int = 1000,
+    ) -> list[Lead]:
+        """Search across ALL sources. Each lead is tagged with its source."""
+        sources = self.list_sources()
+        if not sources:
+            return []
+        all_leads: list[Lead] = []
+        for s in sources:
+            leads = self.query(
+                source=s.name,
+                status=status,
+                search=search,
+                has_phone=has_phone,
+                min_rating=min_rating,
+                limit=limit,
+            )
+            all_leads.extend(leads)
+        # Sort by last_seen DESC across all
+        all_leads.sort(key=lambda l: l.last_seen, reverse=True)
+        return all_leads[:limit]
+
+    def get(self, lead_id: int, source: str) -> Optional[Lead]:
+        table = _table_for_source(source)
         with self._conn() as c:
-            row = c.execute("SELECT * FROM leads WHERE id = ?", (lead_id,)).fetchone()
-        return _row_to_lead(row) if row else None
+            try:
+                row = c.execute(f"SELECT * FROM {table} WHERE id = ?", (lead_id,)).fetchone()
+            except sqlite3.OperationalError:
+                return None
+        return _row_to_lead(row, source) if row else None
 
     # ---------- update ----------
-    def set_status(self, lead_id: int, status: str, note: Optional[str] = None) -> None:
+    def set_status(
+        self,
+        lead_id: int,
+        status: str,
+        source: str,
+        note: Optional[str] = None,
+    ) -> None:
         if status not in STATUSES:
             raise ValueError(f"Invalid status '{status}'. Choose from {STATUSES}")
+        table = _table_for_source(source)
         with self._conn() as c:
             if note is not None:
-                c.execute("UPDATE leads SET status=?, notes=?, last_seen=? WHERE id=?",
-                          (status, note, datetime.now().isoformat(timespec="seconds"), lead_id))
+                c.execute(
+                    f"UPDATE {table} SET status=?, notes=?, last_seen=? WHERE id=?",
+                    (status, note, datetime.now().isoformat(timespec="seconds"), lead_id),
+                )
             else:
-                c.execute("UPDATE leads SET status=?, last_seen=? WHERE id=?",
-                          (status, datetime.now().isoformat(timespec="seconds"), lead_id))
+                c.execute(
+                    f"UPDATE {table} SET status=?, last_seen=? WHERE id=?",
+                    (status, datetime.now().isoformat(timespec="seconds"), lead_id),
+                )
 
-    def bulk_set_status(self, lead_ids: list[int], status: str) -> int:
+    def bulk_set_status(self, lead_ids: list[int], source: str, status: str) -> int:
         if not lead_ids or status not in STATUSES:
             return 0
+        table = _table_for_source(source)
         with self._conn() as c:
             qmarks = ",".join("?" for _ in lead_ids)
             cur = c.execute(
-                f"UPDATE leads SET status=?, last_seen=? WHERE id IN ({qmarks})",
+                f"UPDATE {table} SET status=?, last_seen=? WHERE id IN ({qmarks})",
                 [status, datetime.now().isoformat(timespec="seconds"), *lead_ids],
             )
             return cur.rowcount
 
-    def add_tags(self, lead_ids: list[int], tags: list[str]) -> None:
-        if not lead_ids or not tags:
-            return
-        with self._conn() as c:
-            for lid in lead_ids:
-                row = c.execute("SELECT tags FROM leads WHERE id=?", (lid,)).fetchone()
-                if not row:
-                    continue
-                existing = set(t.strip() for t in (row["tags"] or "").split(",") if t.strip())
-                existing.update(t.strip() for t in tags if t.strip())
-                c.execute(
-                    "UPDATE leads SET tags=?, last_seen=? WHERE id=?",
-                    (",".join(sorted(existing)), datetime.now().isoformat(timespec="seconds"), lid),
-                )
-
-    def delete(self, lead_ids: list[int]) -> int:
+    def delete(self, lead_ids: list[int], source: str) -> int:
         if not lead_ids:
             return 0
+        table = _table_for_source(source)
         with self._conn() as c:
             qmarks = ",".join("?" for _ in lead_ids)
-            cur = c.execute(f"DELETE FROM leads WHERE id IN ({qmarks})", lead_ids)
+            cur = c.execute(f"DELETE FROM {table} WHERE id IN ({qmarks})", lead_ids)
             return cur.rowcount
 
-    # ---------- contacts (call log) ----------
-    def add_contact(self, lead_id: int, kind: str, summary: str = "") -> int:
+    # ---------- contacts ----------
+    def add_contact(self, lead_id: int, source: str, kind: str, summary: str = "") -> int:
+        table_leads = _table_for_source(source)
+        table_contacts = _contacts_table_for_source(source)
         with self._conn() as c:
             cur = c.execute(
-                "INSERT INTO contacts (lead_id, kind, summary, occurred_at) VALUES (?, ?, ?, ?)",
+                f"INSERT INTO {table_contacts} (lead_id, kind, summary, occurred_at) VALUES (?, ?, ?, ?)",
                 (lead_id, kind, summary, datetime.now().isoformat(timespec="seconds")),
             )
-            c.execute("UPDATE leads SET last_seen=? WHERE id=?",
-                      (datetime.now().isoformat(timespec="seconds"), lead_id))
+            c.execute(
+                f"UPDATE {table_leads} SET last_seen=? WHERE id=?",
+                (datetime.now().isoformat(timespec="seconds"), lead_id),
+            )
             return cur.lastrowid
 
-    def contacts_for(self, lead_id: int) -> list[dict]:
+    def contacts_for(self, lead_id: int, source: str) -> list[dict]:
+        table = _contacts_table_for_source(source)
         with self._conn() as c:
-            rows = c.execute(
-                "SELECT * FROM contacts WHERE lead_id=? ORDER BY occurred_at DESC",
-                (lead_id,),
-            ).fetchall()
+            try:
+                rows = c.execute(
+                    f"SELECT * FROM {table} WHERE lead_id=? ORDER BY occurred_at DESC",
+                    (lead_id,),
+                ).fetchall()
+            except sqlite3.OperationalError:
+                return []
         return [dict(r) for r in rows]
 
     # ---------- stats ----------
     def stats(self) -> dict:
-        """Return high-level stats: counts by status, total, with-phone, etc."""
+        """High-level stats: total across all sources, per-source breakdown, etc."""
         with self._conn() as c:
-            total = c.execute("SELECT COUNT(*) AS n FROM leads").fetchone()["n"]
-            with_phone = c.execute(
-                "SELECT COUNT(*) AS n FROM leads WHERE phone_digits IS NOT NULL AND phone_digits != ''"
-            ).fetchone()["n"]
-            status_rows = c.execute(
-                "SELECT status, COUNT(*) AS n FROM leads GROUP BY status"
+            sources_rows = c.execute(
+                "SELECT name, lead_count FROM sources ORDER BY lead_count DESC"
             ).fetchall()
-            sources = c.execute(
-                """SELECT IFNULL(source_query, 'Direct') AS src, COUNT(*) AS n
-                   FROM leads GROUP BY src ORDER BY n DESC LIMIT 20"""
-            ).fetchall()
-            recent = c.execute(
-                "SELECT COUNT(*) AS n FROM leads WHERE last_seen >= datetime('now', '-7 days')"
-            ).fetchone()["n"]
-        by_status = {s: 0 for s in STATUSES}
-        for r in status_rows:
-            by_status[r["status"]] = r["n"]
+            # Total across all
+            total = 0
+            with_phone = 0
+            by_status: dict[str, int] = {s: 0 for s in STATUSES}
+            for sr in sources_rows:
+                tbl = _table_for_source(sr["name"])
+                try:
+                    rows = c.execute(
+                        f"SELECT status, COUNT(*) AS n, "
+                        f"SUM(CASE WHEN phone_digits IS NOT NULL AND phone_digits != '' THEN 1 ELSE 0 END) AS ph "
+                        f"FROM {tbl} GROUP BY status"
+                    ).fetchall()
+                    for r in rows:
+                        by_status[r["status"]] = by_status.get(r["status"], 0) + r["n"]
+                        total += r["n"]
+                        with_phone += r["ph"] or 0
+                except sqlite3.OperationalError:
+                    pass
         return {
             "total": total,
             "with_phone": with_phone,
-            "recent_7d": recent,
             "by_status": by_status,
-            "by_source": [dict(r) for r in sources],
+            "by_source": [dict(r) for r in sources_rows],
         }
 
-    # ---------- export/import ----------
-    def export_to_csv_bytes(self, filter_kwargs: Optional[dict] = None) -> bytes:
-        """Export leads matching filters (or all if None) as CSV bytes."""
-        leads = self.query(**(filter_kwargs or {}), limit=100_000)
+    def export_source_csv(self, source: str) -> bytes:
+        """Export all leads from one source as CSV bytes."""
+        leads = self.query(source=source, limit=100_000)
+        return self._leads_to_csv(leads)
+
+    def export_all_csv(self) -> bytes:
+        """Export ALL leads from ALL sources as one combined CSV."""
+        leads = self.query_all(limit=100_000)
+        return self._leads_to_csv(leads)
+
+    @staticmethod
+    def _leads_to_csv(leads: list[Lead]) -> bytes:
         import io, csv
         buf = io.StringIO()
         if leads:
-            w = csv.DictWriter(buf, fieldnames=list(vars(leads[0]).keys()))
+            # Use dataclass fields
+            fieldnames = [f for f in vars(leads[0]).keys()]
+            w = csv.DictWriter(buf, fieldnames=fieldnames)
             w.writeheader()
             for lead in leads:
                 w.writerow(vars(lead))
         return buf.getvalue().encode("utf-8-sig")
 
     def reset(self) -> None:
-        """Drop all tables (for tests only)."""
+        """Drop everything. For tests."""
         with self._conn() as c:
-            c.executescript("DROP TABLE IF EXISTS contacts; DROP TABLE IF EXISTS leads;")
+            sources = c.execute("SELECT table_name FROM sources").fetchall()
+            for r in sources:
+                c.execute(f"DROP TABLE IF EXISTS {r['table_name']}")
+                c.execute(f"DROP TABLE IF EXISTS {r['table_name'].replace('leads_', 'contacts_')}")
+            c.execute("DROP TABLE IF EXISTS sources")
         self._init_schema()

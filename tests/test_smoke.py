@@ -326,16 +326,39 @@ def test_database_upsert_and_query():
         # Re-insert same — updates times_seen
         s2 = db.upsert_many([b1], source_query="test", backend="botasaurus")
         assert s2["inserted"] == 0
-        # Query with status as string (not list)
-        leads = db.query(status="New")
+        # Query within source
+        leads = db.query(source="test", status="New")
         assert len(leads) == 2
         # Search by name
-        found = db.query(search="Tan")
+        found = db.query(source="test", search="Tan")
         assert len(found) == 1
         assert found[0].name == "Tan Coffee"
-        # Search by source
-        by_src = db.query(source="test")
-        assert len(by_src) == 2
+        # list_sources
+        sources = db.list_sources()
+        assert len(sources) == 1
+        assert sources[0].name == "test"
+        assert sources[0].lead_count == 2
+
+
+def test_database_separate_sources():
+    """Each source must live in its own table \u2014 leads never mix."""
+    from database import LeadDB
+    from scraper import Business
+    import tempfile, pathlib
+    with tempfile.TemporaryDirectory() as tmp:
+        db = LeadDB(pathlib.Path(tmp) / "test.db")
+        db.upsert_many([Business(name="A", phone_number="111")], source_query="cafes", backend="x")
+        db.upsert_many([Business(name="B", phone_number="222")], source_query="hotels", backend="x")
+        # Each source has its own list
+        cafes = db.query(source="cafes")
+        hotels = db.query(source="hotels")
+        assert len(cafes) == 1 and cafes[0].name == "A"
+        assert len(hotels) == 1 and hotels[0].name == "B"
+        # query_all spans them
+        all_leads = db.query_all()
+        assert len(all_leads) == 2
+        # sources registry has 2 entries
+        assert len(db.list_sources()) == 2
 
 
 def test_database_status_lifecycle():
@@ -346,9 +369,9 @@ def test_database_status_lifecycle():
         db = LeadDB(pathlib.Path(tmp) / "test.db")
         b = Business(name="X", phone_number="12345")
         db.upsert_many([b], source_query="t", backend="x")
-        lead_id = db.query()[0].id
-        db.set_status(lead_id, "Contacted", note="call back Mon")
-        lead = db.get(lead_id)
+        lead_id = db.query(source="t")[0].id
+        db.set_status(lead_id, "Contacted", source="t", note="call back Mon")
+        lead = db.get(lead_id, source="t")
         assert lead.status == "Contacted"
         assert lead.notes == "call back Mon"
 
@@ -361,11 +384,53 @@ def test_database_contacts():
         db = LeadDB(pathlib.Path(tmp) / "test.db")
         b = Business(name="X", phone_number="12345")
         db.upsert_many([b], source_query="t", backend="x")
-        lead_id = db.query()[0].id
-        db.add_contact(lead_id, "call", "Spoke 5 min")
-        db.add_contact(lead_id, "whatsapp", "Sent details")
-        contacts = db.contacts_for(lead_id)
+        lead_id = db.query(source="t")[0].id
+        db.add_contact(lead_id, "t", "call", "Spoke 5 min")
+        db.add_contact(lead_id, "t", "whatsapp", "Sent details")
+        contacts = db.contacts_for(lead_id, "t")
         assert len(contacts) == 2
+
+
+def test_database_drop_source():
+    from database import LeadDB
+    from scraper import Business
+    import tempfile, pathlib
+    with tempfile.TemporaryDirectory() as tmp:
+        db = LeadDB(pathlib.Path(tmp) / "test.db")
+        db.upsert_many([Business(name="A"), Business(name="B"), Business(name="C")],
+                       source_query="hotels", backend="x")
+        db.upsert_many([Business(name="D")], source_query="cafes", backend="x")
+        # Drop hotels only
+        n = db.drop_source("hotels")
+        assert n == 3
+        # Cafes still intact
+        assert len(db.query(source="cafes")) == 1
+        # Hotels gone
+        assert db.query(source="hotels") == []
+        # Source registry no longer has hotels
+        names = [s.name for s in db.list_sources()]
+        assert "hotels" not in names
+        assert "cafes" in names
+
+
+def test_database_rename_source():
+    from database import LeadDB
+    from scraper import Business
+    import tempfile, pathlib
+    with tempfile.TemporaryDirectory() as tmp:
+        db = LeadDB(pathlib.Path(tmp) / "test.db")
+        db.upsert_many([Business(name="A", phone_number="111")],
+                       source_query="old name", backend="x")
+        ok = db.rename_source("old name", "new name")
+        assert ok
+        # Data now under new name
+        new_leads = db.query(source="new name")
+        assert len(new_leads) == 1 and new_leads[0].name == "A"
+        # Old source empty
+        assert db.query(source="old name") == []
+        # Registry reflects new name
+        names = [s.name for s in db.list_sources()]
+        assert "new name" in names and "old name" not in names
 
 
 def test_database_stats_and_export():
@@ -381,8 +446,30 @@ def test_database_stats_and_export():
         assert stats["total"] == 3
         assert stats["with_phone"] == 3
         assert stats["by_status"]["New"] == 3
-        csv = db.export_to_csv_bytes()
+        # Export from one source
+        csv = db.export_source_csv("test")
         assert b"X0" in csv and b"X1" in csv and b"X2" in csv
+        # Export all
+        csv_all = db.export_all_csv()
+        assert b"X0" in csv_all
+
+
+def test_database_query_all_spans_sources():
+    from database import LeadDB
+    from scraper import Business
+    import tempfile, pathlib
+    with tempfile.TemporaryDirectory() as tmp:
+        db = LeadDB(pathlib.Path(tmp) / "test.db")
+        for src in ("hotels", "cafes", "restaurants"):
+            for i in range(2):
+                db.upsert_many([Business(name=f"{src}_{i}", phone_number=f"9{src[:1]}{i}")],
+                               source_query=src, backend="x")
+        # 3 sources × 2 leads = 6
+        all_leads = db.query_all()
+        assert len(all_leads) == 6
+        # Cross-source search works
+        found = db.query_all(search="hotels_0")
+        assert len(found) == 1
 
 
 # ---------------------------------------------------------------------------
