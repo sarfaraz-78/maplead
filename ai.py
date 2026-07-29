@@ -538,26 +538,66 @@ def suggest_queries(city: str, industry: str) -> dict:
 
 
 def _fallback_queries(city: str, industry: str) -> dict:
-    """Default query suggestions when AI is not available."""
-    base = [
-        f"{industry} in {city}",
-        f"new {industry} in {city}",
-        f"top rated {industry} in {city}",
-        f"popular {industry} in {city}",
-        f"{industry} shops in {city}",
+    """Default query suggestions when AI is not available.
+
+    Uses known high-value Google Maps query patterns for common Indian
+    signage-customer industries. Better than a single generic query.
+    """
+    city = city.strip() or "your city"
+    industry_lc = (industry or "").strip().lower() or "business"
+    is_signage = "sign" in industry_lc
+
+    signage_queries = [
+        {"query": f"shopping malls in {city}",
+         "why": "Malls buy huge exterior + interior signage (big contracts)",
+         "expected_volume": "high"},
+        {"query": f"jewellery shops in {city}",
+         "why": "Jewellers spend BIG on gold-lit, decorative signage",
+         "expected_volume": "high"},
+        {"query": f"restaurants in {city}",
+         "why": "Restaurants need menu boards + glowing storefront signs",
+         "expected_volume": "high"},
+        {"query": f"car dealerships in {city}",
+         "why": "Showrooms need large exterior + interior signage",
+         "expected_volume": "medium"},
+        {"query": f"hotels in {city}",
+         "why": "Hotels need facade, wayfinding + room signage",
+         "expected_volume": "medium"},
+        {"query": f"advertising agencies in {city}",
+         "why": "Agencies sub-contract signage work to vendors (recurring)",
+         "expected_volume": "low"},
+        {"query": f"event organisers in {city}",
+         "why": "Banners, standees, backdrops (recurring orders)",
+         "expected_volume": "low"},
     ]
+    generic_queries = [
+        {"query": f"{industry} in {city}",
+         "why": "Broad coverage", "expected_volume": "high"},
+        {"query": f"top rated {industry} in {city}",
+         "why": "Filters to established businesses with marketing budget",
+         "expected_volume": "high"},
+        {"query": f"new {industry} openings in {city}",
+         "why": "New openings need fresh signage — very high intent",
+         "expected_volume": "medium"},
+        {"query": f"popular {industry} in {city}",
+         "why": "High-traffic = high-visibility = signage-conscious",
+         "expected_volume": "medium"},
+        {"query": f"{industry} shops in {city}",
+         "why": "Shops have storefronts = visible signage needs",
+         "expected_volume": "high"},
+    ]
+    chosen = signage_queries if is_signage else generic_queries
     return {
-        "queries": [
-            {"query": q, "why": f"Broad coverage for {industry}", "expected_volume": "high"}
-            for q in base
-        ],
-        "advice": "No AI configured \u2014 using generic queries. Add an OpenRouter key for smart suggestions.",
+        "queries": chosen,
+        "advice": (
+            f"No AI configured — using built-in {len(chosen)} curated query patterns "
+            f"for '{industry}'. Add an OpenRouter key in ⚙ Settings for AI-tailored "
+            f"suggestions specific to your city and goals."
+        ),
     }
 
 
-# ---------------------------------------------------------------------------
-# Cost estimator
-# ---------------------------------------------------------------------------
+
 def estimate_cost(input_tokens: int, output_tokens: int) -> dict:
     """Rough USD cost for a call given the current model. Returns dict or None."""
     cur = next((m for m in POPULAR_MODELS if m["id"] == get_model()), None)

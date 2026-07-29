@@ -1571,7 +1571,15 @@ elif page == PAGE_SETTINGS:
     # ---- Campaign strategist
     st.divider()
     st.markdown("### 🎯 Campaign strategist")
-    st.caption("Tell the AI your city + industry — get 5 smart Google Maps queries to run.")
+    if ai_mod.is_configured():
+        st.caption("Tell the AI your city + industry — get 5+ smart Google Maps queries to run.")
+    else:
+        st.caption(
+            "Tell us your city + industry — get curated Google Maps queries. "
+            "🔑 No AI key yet? You still get smart built-in suggestions, but for "
+            "city-specific AI-powered recommendations, add an OpenRouter key in the "
+            "form above."
+        )
     cs1, cs2 = st.columns(2)
     with cs1:
         cs_city = st.text_input("City", value="Hyderabad", key="strat_city")
@@ -1579,15 +1587,32 @@ elif page == PAGE_SETTINGS:
         cs_industry = st.text_input("Industry / category", value="signage",
                                     key="strat_industry",
                                     help="e.g. 'restaurants', 'signage', 'jewellery shops'")
-    if st.button("✨ Suggest 5 best queries", use_container_width=True):
+    col_btn1, col_btn2 = st.columns([2, 1])
+    with col_btn1:
+        run_strat = st.button("✨ Suggest best queries", use_container_width=True,
+                              type="primary")
+    with col_btn2:
+        if not ai_mod.is_configured():
+            st.link_button("🔑 Add OpenRouter key",
+                           "https://openrouter.ai/keys",
+                           use_container_width=True,
+                           help="Get a free OpenRouter account, then paste the key in the form above")
+    if run_strat:
         with st.spinner("Thinking…"):
             result = ai_mod.suggest_queries(cs_city, cs_industry)
         if result.get("advice"):
             st.info(f"**Strategy:** {result['advice']}")
+        # Show AI vs fallback badge
+        ai_status = "🤖 AI" if ai_mod.is_configured() else "📋 Built-in"
+        st.caption(f"{ai_status} suggestions for **{cs_industry}** in **{cs_city}**:")
         for q in result.get("queries", []):
             with st.expander(f"🔎 {q['query']}", expanded=False):
                 st.write(f"**Why:** {q.get('why', '—')}")
                 st.write(f"**Expected volume:** {q.get('expected_volume', '—')}")
+        # Direct "use this query" buttons — copy to clipboard
+        st.markdown("**Copy any query to use in 🔍 Scrape:**")
+        for q in result.get("queries", []):
+            st.code(q['query'], language="text")
 
     # ---- Test panel
     st.divider()

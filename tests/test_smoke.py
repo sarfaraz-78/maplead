@@ -601,6 +601,20 @@ def test_ai_suggest_queries_fallback():
     assert "queries" in result
     assert len(result["queries"]) >= 5
     assert all("query" in q for q in result["queries"])
+    # Each query should have why + expected_volume
+    for q in result["queries"]:
+        assert "why" in q and "expected_volume" in q
+    # Advice should mention Settings
+    assert "Settings" in result["advice"] or "OpenRouter" in result["advice"]
+
+
+def test_ai_suggest_queries_signage_special():
+    """For signage industry, fallback should return signage-specific queries."""
+    import ai as ai_mod
+    result = ai_mod.suggest_queries("Mumbai", "signage business")
+    queries_text = " ".join(q["query"] for q in result["queries"])
+    # Should have at least one of: malls / jewellery / restaurants
+    assert any(k in queries_text for k in ("mall", "jeweller", "restaurant", "hotel"))
 
 
 def test_ai_estimate_cost_known_model():
