@@ -150,6 +150,65 @@ def test_rows_schema():
     assert rows[0]["Longitude"] == -74.0
 
 
+def test_make_filename_basic():
+    from utils import make_filename
+    fn = make_filename("restaurants in Hyderabad", "botasaurus", ext="csv", lead_count=180)
+    # No spaces, no uppercase, includes query + backend + count + date + .csv
+    assert " " not in fn
+    assert fn.endswith(".csv")
+    assert "restaurants_in_hyderabad" in fn
+    assert "botasaurus" in fn
+    assert "180leads" in fn
+    assert fn.count(".") >= 1
+
+
+def test_make_filename_pack():
+    from utils import make_filename
+    fn = make_filename("", "botasaurus", pack_name="Signage — Hyderabad", ext="xlsx", lead_count=180)
+    assert "leadpack" in fn
+    assert "xlsx" in fn
+    # Em-dash sanitized to underscore
+    assert "\u2014" not in fn
+    assert "signage" in fn and "hyderabad" in fn
+
+
+def test_export_phones_csv_skips_no_phone():
+    from utils import export_phones_csv, Business
+    biz_with = Business(name="A", phone_number="+91 98765 43210")
+    biz_without = Business(name="B", phone_number=None)
+    out = export_phones_csv([biz_with, biz_without]).decode("utf-8-sig")
+    assert "A" in out
+    assert ",B," not in out  # B should not appear
+    assert "tel:+919876543210" in out or "tel:+91 98765 43210" in out  # click-to-call link
+
+
+def test_export_vcard_has_tel_field():
+    from utils import export_vcard, Business
+    biz = Business(name="Tan Coffee", phone_number="081210 81814", address="Hitech City")
+    vcf = export_vcard([biz]).decode("utf-8")
+    assert vcf.startswith("BEGIN:VCARD")
+    assert "END:VCARD" in vcf
+    assert "TEL;TYPE=VOICE,WORK:081210 81814" in vcf
+    assert "Tan Coffee" in vcf
+
+
+def test_export_vcard_escapes_special_chars():
+    from utils import export_vcard, Business
+    biz = Business(name="Café, Espresso; Bar", phone_number="+1-555-0100")
+    vcf = export_vcard([biz]).decode("utf-8")
+    # Comma and semicolon must be backslash-escaped
+    assert r"Caf\u00e9\, Espresso\; Bar" in vcf or "Café\\, Espresso\\; Bar" in vcf
+
+
+def test_export_excel_by_source_sheets():
+    from utils import export_excel_by_source, Business
+    a = Business(name="A"); a.__dict__["source_query"] = "cafes in Hyderabad"
+    b = Business(name="B"); b.__dict__["source_query"] = "hotels in Hyderabad"
+    c = Business(name="C"); c.__dict__["source_query"] = "cafes in Hyderabad"
+    xlsx = export_excel_by_source([a, b, c])
+    assert xlsx[:2] == b"PK"  # .xlsx is a zip (PK header)
+
+
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------

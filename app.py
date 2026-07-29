@@ -16,7 +16,7 @@ import pandas as pd
 import streamlit as st
 
 from scraper import Business, BusinessList
-from utils import compute_stats, export_csv, export_excel, export_json
+from utils import compute_stats, export_csv, export_excel, export_json, export_phones_csv, export_vcard, export_excel_by_source, make_filename
 
 try:
     from api_backends import get_backend, ScraperBackend
@@ -536,6 +536,8 @@ if run:
                 )
         else:
             st.session_state.results = biz_list
+            st.session_state.last_search_term = search_term.strip()
+            st.session_state.last_backend = backend_name
             st.session_state.run_meta = {
                 "elapsed": elapsed,
                 "count": len(biz_list.business_list) if biz_list else 0,
@@ -706,12 +708,20 @@ if st.session_state.results and st.session_state.results.business_list:
 
         # Downloads
         st.markdown("##### 📥 Download")
+
+        # Build a smart filename that includes the query, backend, and lead count
+        is_pack = bool(st.session_state.get("run_meta", {}).get("pack"))
+        fname_query = st.session_state.get("lead_pack_select") or st.session_state.get("last_search_term") or ""
+        fname_backend = st.session_state.get("last_backend") or ""
+        fname_pack = st.session_state.get("run_meta", {}).get("pack", "") if is_pack else ""
+        fname_count = len(filtered)
+
         d1, d2, d3 = st.columns(3)
         with d1:
             st.download_button(
                 "📊 Excel (.xlsx)",
                 data=export_excel(filtered),
-                file_name=f"maplead_{int(time.time())}.xlsx",
+                file_name=make_filename(fname_query, fname_backend, fname_pack, "xlsx", fname_count),
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True,
             )
@@ -719,7 +729,7 @@ if st.session_state.results and st.session_state.results.business_list:
             st.download_button(
                 "📄 CSV",
                 data=export_csv(filtered),
-                file_name=f"maplead_{int(time.time())}.csv",
+                file_name=make_filename(fname_query, fname_backend, fname_pack, "csv", fname_count),
                 mime="text/csv",
                 use_container_width=True,
             )
@@ -727,9 +737,47 @@ if st.session_state.results and st.session_state.results.business_list:
             st.download_button(
                 "🔧 JSON",
                 data=export_json(filtered),
-                file_name=f"maplead_{int(time.time())}.json",
+                file_name=make_filename(fname_query, fname_backend, fname_pack, "json", fname_count),
                 mime="application/json",
                 use_container_width=True,
+            )
+
+        # New: phone-only and vCard for cold outreach
+        st.markdown("##### 📞 For cold outreach")
+        phones = [b for b in filtered if b.phone_number]
+        if not phones:
+            st.caption("No leads with phone numbers in the current filter. Loosen filters or pick a different backend.")
+        else:
+            p1, p2 = st.columns(2)
+            with p1:
+                st.download_button(
+                    f"📞 Phone-only CSV ({len(phones)} leads)",
+                    data=export_phones_csv(phones),
+                    file_name=make_filename(fname_query, fname_backend, fname_pack, "phones.csv", len(phones)),
+                    mime="text/csv",
+                    use_container_width=True,
+                    help="Just Name + Phone + click-to-call link. Drop into your calling sheet.",
+                )
+            with p2:
+                st.download_button(
+                    f"👤 vCard (.vcf) — {len(phones)} contacts",
+                    data=export_vcard(phones),
+                    file_name=make_filename(fname_query, fname_backend, fname_pack, "vcf", len(phones)),
+                    mime="text/vcard",
+                    use_container_width=True,
+                    help="Import directly into phone contacts / WhatsApp / Truecaller.",
+                )
+
+        # For lead packs: Excel with one sheet per source query
+        if is_pack:
+            st.markdown("##### 📚 Lead-pack export (split by campaign)")
+            st.download_button(
+                "📊 Excel — 1 sheet per query",
+                data=export_excel_by_source(filtered),
+                file_name=make_filename("", fname_backend, fname_pack, "xlsx", fname_count),
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+                help="One sheet per search query that produced leads in this pack, plus an 'All leads' summary sheet.",
             )
     else:
         st.info("No leads match your filters. Loosen the filters and try again.")
