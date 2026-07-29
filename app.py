@@ -1645,8 +1645,56 @@ elif page == PAGE_SETTINGS:
                         x,
                     ),
                 )
-                inline_submitted = st.form_submit_button("Save key & enable AI",
-                                                        type="primary")
+                col_save, col_test = st.columns(2)
+                with col_save:
+                    inline_submitted = st.form_submit_button(
+                        "💾 Save key & enable AI", type="primary", use_container_width=True,
+                    )
+                with col_test:
+                    inline_test = st.form_submit_button(
+                        "🔌 Test connection", use_container_width=True,
+                    )
+
+                # Test connection without saving (so user can verify a key first)
+                if inline_test and inline_key:
+                    from provider_detect import detect_provider, mask_key
+                    prov = detect_provider(inline_key)
+                    if prov is None:
+                        st.warning(
+                            f"⚠️ Key `{mask_key(inline_key)}` has an unrecognized prefix. "
+                            f"Most providers use sk-or-*, sk-ant-*, gsk_*, etc. "
+                            f"Will still try OpenRouter endpoint."
+                        )
+                    else:
+                        st.info(
+                            f"🔎 Detected provider: **{prov.name}** — "
+                            f"endpoint `{prov.base_url}`, default model `{prov.default_model}`"
+                        )
+                    # Try a real ping
+                    try:
+                        import httpx
+                        test_url = (prov.base_url if prov else "https://openrouter.ai/api/v1") + "/chat/completions"
+                        r = httpx.post(
+                            test_url,
+                            headers={"Authorization": f"Bearer {inline_key}",
+                                     "Content-Type": "application/json",
+                                     "HTTP-Referer": "https://github.com/sabsar42/maplead",
+                                     "X-Title": "MapLead AI test"},
+                            json={"model": (inline_model if 'inline_model' in dir() else "qwen/qwen3.7-flash"),
+                                  "messages": [{"role": "user", "content": "ping"}],
+                                  "max_tokens": 5},
+                            timeout=15,
+                        )
+                        if r.status_code == 200:
+                            st.success(f"✅ Key works! Model responded.")
+                        elif r.status_code == 401:
+                            st.error(f"❌ 401 Unauthorized — key is invalid for this provider")
+                        elif r.status_code == 402:
+                            st.error(f"❌ 402 Payment required — account out of credits")
+                        else:
+                            st.error(f"❌ HTTP {r.status_code}: {r.text[:200]}")
+                    except Exception as exc:
+                        st.error(f"❌ Connection failed: {exc}")
                 if inline_submitted and inline_key:
                     import os as _os
                     st.session_state["MAPLEAD_OPENAI_API_KEY"] = inline_key
@@ -1678,11 +1726,15 @@ elif page == PAGE_SETTINGS:
     if run_strat:
         with st.spinner("Thinking…"):
             result = ai_mod.suggest_queries(cs_city, cs_industry)
-        if result.get("advice"):
-            st.info(f"**Strategy:** {result['advice']}")
         # Show AI vs fallback badge
         ai_status = "🤖 AI" if ai_mod.is_configured() else "📋 Built-in"
         st.caption(f"{ai_status} suggestions for **{cs_industry}** in **{cs_city}**:")
+        # Suppress the verbose "No AI configured" warning - just show a tiny hint
+        if not ai_mod.is_configured():
+            st.caption(
+                "💡 Tip: Add an OpenRouter key in ⚙ Settings for AI-tailored suggestions. "
+                "These built-in patterns work fine without it."
+            )
         for q in result.get("queries", []):
             with st.expander(f"🔎 {q['query']}", expanded=False):
                 st.write(f"**Why:** {q.get('why', '—')}")

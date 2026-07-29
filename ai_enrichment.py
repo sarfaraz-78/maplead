@@ -26,6 +26,7 @@ from typing import Any, Optional
 import httpx
 
 from scraper import Business
+from provider_detect import detect_provider, mask_key
 
 logger = logging.getLogger(__name__)
 
@@ -51,21 +52,53 @@ DEFAULT_TIMEOUT = 30.0
 
 
 class AIEnricher:
-    """Add AI smarts to scraped leads via OpenRouter."""
+    """Add AI smarts to scraped leads.
+
+    Supports any OpenAI-compatible provider via auto-detection of the
+    API key prefix (OpenRouter, Anthropic, OpenAI, Groq, Together, Fireworks).
+    """
 
     def __init__(
         self,
         api_key: Optional[str] = None,
-        model: str = DEFAULT_MODEL,
+        model: Optional[str] = None,
+        base_url: Optional[str] = None,
     ) -> None:
-        self.api_key = api_key or os.environ.get("OPENROUTER_API_KEY", "")
+        # Read key from multiple possible env vars
+        self.api_key = (
+            api_key
+            or os.environ.get("MAPLEAD_OPENAI_API_KEY", "")
+            or os.environ.get("OPENROUTER_API_KEY", "")
+        )
         if not self.api_key:
             raise ValueError(
-                "OpenRouter API key missing. "
-                "Set OPENROUTER_API_KEY env var or pass api_key=...  "
-                "Get a key at https://openrouter.ai/keys"
+                "API key missing. Set MAPLEAD_OPENAI_API_KEY env var, paste in sidebar, "
+                "or pass api_key=...  Get an OpenRouter key at https://openrouter.ai/keys"
             )
-        self.model = model
+
+        # Auto-detect provider from key prefix
+        provider = detect_provider(self.api_key)
+        if provider is None:
+            # Unknown prefix — default to OpenRouter which accepts any OpenAI-format key
+            self.base_url = base_url or os.environ.get(
+                "MAPLEAD_OPENAI_BASE_URL", "https://openrouter.ai/api/v1"
+            )
+            self.model = model or os.environ.get("MAPLEAD_OPENAI_MODEL", DEFAULT_MODEL)
+            logger.warning(
+                "Unknown API key prefix; defaulting to base_url=%s model=%s",
+                self.base_url, self.model,
+            )
+        else:
+            self.base_url = base_url or os.environ.get(
+                "MAPLEAD_OPENAI_BASE_URL", provider.base_url
+            )
+            self.model = model or os.environ.get(
+                "MAPLEAD_OPENAI_MODEL", provider.default_model
+            )
+            logger.info(
+                "AI provider: %s | model: %s | key: %s",
+                provider.name, self.model, mask_key(self.api_key),
+            )
 
     # ----------------------------------------------------------------- public
 
@@ -189,9 +222,11 @@ Reply with ONLY the tag, nothing else."""
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
-            "HTTP-Referer": "https://github.com/sabsar42/maplead",
-            "X-Title": "MapLead AI Enrichment",
         }
+        # OpenRouter requires these headers for app attribution
+        if "openrouter.ai" in self.base_url:
+            headers["HTTP-Referer"] = "https://github.com/sabsar42/maplead"
+            headers["X-Title"] = "MapLead AI Enrichment"
         body: dict[str, Any] = {
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}],
@@ -201,22 +236,34 @@ Reply with ONLY the tag, nothing else."""
         if json_mode:
             body["response_format"] = {"type": "json_object"}
 
-        logger.debug("OpenRouter call: model=%s json=%s", self.model, json_mode)
+        logger.debug("AI call: model=%s base=%s json=%s", self.model, self.base_url, json_mode)
 
         async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
             response = await client.post(
-                f"{BASE_URL}/chat/completions",
+                f"{self.base_url.rstrip('/')}/chat/completions",
                 json=body,
                 headers=headers,
             )
 
         if response.status_code == 401:
-            raise PermissionError("OpenRouter API key invalid or revoked")
+            raise PermissionError(
+                f"API key invalid or revoked (provider returned 401). "
+                f"Check the key is correct for {self.base_url}. "
+                f"Key in use: {mask_key(self.api_key)}"
+            )
         if response.status_code == 402:
-            raise PermissionError("OpenRouter account out of credits")
+            raise PermissionError("Account out of credits / payment required")
         if response.status_code == 429:
-            raise PermissionError("OpenRouter rate limit hit - slow down")
+            raise PermissionError("Rate limit hit — slow down or upgrade")
+        if response.status_code == 404:
+            raise PermissionError(
+                f"Model '{self.model}' not found on {self.base_url}. "
+                f"Try a different model name from the provider's model list."
+            )
         response.raise_for_status()
 
         data = response.json()
-        return data["choices"][0]["message"]["content"]
+        try:
+            return data["choices"][0]["message"]["content"]
+        except (KeyError, IndexError) as exc:
+            raise RuntimeError(f"Unexpected response shape: {data}") from exc
