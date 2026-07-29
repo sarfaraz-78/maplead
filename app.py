@@ -20,6 +20,8 @@ import streamlit as st
 from scraper import Business, BusinessList
 from utils import compute_stats, export_csv, export_excel, export_json, export_phones_csv, export_vcard, export_excel_by_source, make_filename
 
+import ai as ai_mod
+
 try:
     from api_backends import get_backend, ScraperBackend
 except ImportError:
@@ -109,9 +111,10 @@ st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 PAGE_SCRAPE = "🔍 Scrape"
 PAGE_DB = "🗄️ Database"
 PAGE_STATS = "📊 Stats"
+PAGE_SETTINGS = "⚙️ Settings"
 page = st.sidebar.radio(
     "Navigation",
-    [PAGE_SCRAPE, PAGE_DB, PAGE_STATS],
+    [PAGE_SCRAPE, PAGE_DB, PAGE_STATS, PAGE_SETTINGS],
     index=0,
     label_visibility="collapsed",
     key="nav_page",
@@ -120,13 +123,20 @@ st.sidebar.divider()
 
 
 # ---------------------------------------------------------------------------
-# Database singleton
+# Database + Security singletons
 # ---------------------------------------------------------------------------
 @st.cache_resource
 def get_db():
     """Single shared LeadDB instance for this Streamlit session."""
     from database import LeadDB
     return LeadDB("maplead.db")
+
+
+@st.cache_resource
+def get_security():
+    """Companion security object for the same DB file."""
+    from security import DatabaseSecurity
+    return DatabaseSecurity("maplead.db", audit_actor="streamlit")
 
 
 # ---------------------------------------------------------------------------
@@ -1134,6 +1144,8 @@ elif page == PAGE_DB:
                             new_note = st.text_area("Notes", value=lead.notes or "", key=f"nt_{lead.source}_{lead.id}")
                             if st.button("Save", key=f"sv_{lead.source}_{lead.id}"):
                                 db.set_status(lead.id, new_status, lead.source, new_note)
+                                sec.audit("set_status", source=lead.source,
+                                          details=f"lead_id={lead.id} -> {new_status}")
                                 st.success("Saved")
                                 st.rerun()
                         with d2:
@@ -1148,6 +1160,38 @@ elif page == PAGE_DB:
                             st.write(f"**Last seen:** {lead.last_seen} (seen {lead.times_seen}x)")
                             if lead.google_maps_url:
                                 st.markdown(f"[Open in Google Maps]({lead.google_maps_url})")
+
+                        # ---- AI helpers (per-lead)
+                        from scraper import Business as _Biz
+                        ai_biz = _Biz(
+                            name=lead.name, address=lead.address,
+                            phone_number=lead.phone, category=lead.category,
+                            website=lead.website,
+                            reviews_average=lead.rating,
+                            reviews_count=lead.reviews_count,
+                            google_maps_url=lead.google_maps_url,
+                        )
+                        st.markdown("**🤖 AI helpers:**")
+                        ac1, ac2, ac3 = st.columns(3)
+                        with ac1:
+                            if st.button("📊 Score", key=f"ai_score_{lead.source}_{lead.id}",
+                                         use_container_width=True):
+                                with st.spinner("Scoring…"):
+                                    s = ai_mod.score_lead(ai_biz)
+                                st.info(f"**{s['score']}/10** — {s['reason']}\n\n*({s['source']})*")
+                        with ac2:
+                            if st.button("💬 WhatsApp", key=f"ai_wa_{lead.source}_{lead.id}",
+                                         use_container_width=True):
+                                with st.spinner("Drafting…"):
+                                    msg = ai_mod.generate_whatsapp_message(ai_biz, city=lead.source.split(" in ")[-1] if " in " in lead.source else "your city")
+                                st.code(msg)
+                        with ac3:
+                            if st.button("📞 Cold call", key=f"ai_cc_{lead.source}_{lead.id}",
+                                         use_container_width=True):
+                                with st.spinner("Drafting…"):
+                                    script = ai_mod.generate_cold_call_script(ai_biz, city=lead.source.split(" in ")[-1] if " in " in lead.source else "your city")
+                                st.code(script)
+
                         st.markdown("**Contact log:**")
                         contacts = db.contacts_for(lead.id, lead.source)
                         if contacts:
@@ -1258,3 +1302,151 @@ elif page == PAGE_STATS:
         st.dataframe(df, use_container_width=True, hide_index=True)
     else:
         st.caption("No leads in the database yet.")
+
+
+# ---------------------------------------------------------------------------
+# Settings page — security, backups, AI config
+# ---------------------------------------------------------------------------
+elif page == PAGE_SETTINGS:
+    from security import DatabaseSecurity
+    import ai as ai_mod
+
+    st.markdown("## ⚙️ Settings")
+    st.caption("Security, backups, audit log, and AI configuration.")
+
+    sec = get_security()
+
+    # ---- Read-only mode
+    st.markdown("### 🔒 Database protection")
+    persisted_ro = sec.is_read_only_persisted()
+    session_ro = sec.read_only
+    ro1, ro2 = st.columns([2, 3])
+    with ro1:
+        st.write("**Current state:**")
+        if session_ro or persisted_ro:
+            st.error("🔒 READ-ONLY — writes are blocked")
+        else:
+            st.success("✅ Writable")
+    with ro2:
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("Enable read-only (this session)",
+                         disabled=session_ro, use_container_width=True):
+                sec.set_read_only(True)
+                st.rerun()
+            if st.button("Disable read-only (this session)",
+                         disabled=not session_ro, use_container_width=True):
+                sec.set_read_only(False)
+                st.rerun()
+        with c2:
+            if persisted_ro:
+                if st.button("Clear persistent read-only", use_container_width=True):
+                    sec.set_read_only(False, persist=True)
+                    st.rerun()
+            else:
+                if st.button("Persist read-only across restarts", use_container_width=True):
+                    sec.set_read_only(True, persist=True)
+                    st.rerun()
+
+    st.divider()
+
+    # ---- Auto-backup
+    st.markdown("### 💾 Backups")
+    st.caption(
+        f"Auto-snapshot is taken before any destructive operation. "
+        f"Up to {DatabaseSecurity.__init__.__code__.co_consts and '20'} backups kept."
+    )
+    b1, b2 = st.columns([1, 3])
+    with b1:
+        if st.button("📸 Create backup now", use_container_width=True):
+            dest = sec.backup(label="manual")
+            st.success(f"Saved to {dest.name}")
+    with b2:
+        backups = sec.list_backups()
+        if backups:
+            import pandas as pd
+            df = pd.DataFrame(backups)
+            st.dataframe(df, use_container_width=True, hide_index=True)
+            # Restore dropdown
+            with st.expander("↩️ Restore from backup", expanded=False):
+                options = {b["name"]: b["path"] for b in backups}
+                pick = st.selectbox("Pick a backup", list(options.keys()))
+                confirm = st.checkbox("Yes, replace current database")
+                if st.button("Restore", disabled=not confirm, type="secondary"):
+                    if sec.restore_backup(options[pick]):
+                        st.success(f"Restored from {pick}. Reload the app.")
+                    else:
+                        st.error("Restore failed.")
+        else:
+            st.caption("No backups yet.")
+
+    st.divider()
+
+    # ---- Audit log
+    st.markdown("### 📜 Audit log")
+    st.caption("Every write to the DB is recorded here. Last 100 entries.")
+    log = sec.get_audit_log(limit=100)
+    if log:
+        import pandas as pd
+        df = pd.DataFrame(log)
+        df = df[["occurred_at", "actor", "action", "source", "details"]]
+        st.dataframe(df, use_container_width=True, hide_index=True)
+    else:
+        st.caption("No audit entries yet.")
+
+    st.divider()
+
+    # ---- AI config
+    st.markdown("### 🤖 AI features")
+    st.caption(
+        "Optional. Connect any OpenAI-compatible API to unlock lead scoring, "
+        "WhatsApp message generation, cold-call scripts, and lead research. "
+        "Works with OpenAI, DeepSeek, Groq, Together, Ollama, LM Studio, etc."
+    )
+
+    configured = ai_mod.is_configured()
+    if configured:
+        st.success("✅ AI configured — features enabled")
+        st.caption(f"Model: `{ai_mod.get_model()}` • Endpoint: `{ai_mod.get_base_url()}`")
+    else:
+        st.warning("⚠️ No API key configured — AI features will use built-in templates")
+
+    with st.form("ai_config"):
+        st.markdown("**Update configuration**")
+        new_key = st.text_input("API key", type="password",
+                                help="Stored only for this session, never written to disk.")
+        new_url = st.text_input("Base URL", value=ai_mod.get_base_url(),
+                                help="Default: OpenAI. Examples: DeepSeek, Groq, Ollama.")
+        new_model = st.text_input("Model", value=ai_mod.get_model(),
+                                  help="e.g. gpt-4o-mini, deepseek-chat, llama3.1")
+        submitted = st.form_submit_button("Save for this session")
+        if submitted:
+            import os as _os
+            if new_key:
+                _os.environ["MAPLEAD_OPENAI_API_KEY"] = new_key
+            if new_url:
+                _os.environ["MAPLEAD_OPENAI_BASE_URL"] = new_url
+            if new_model:
+                _os.environ["MAPLEAD_OPENAI_MODEL"] = new_model
+            st.success("Saved for this session. Re-open Database page to test.")
+            st.rerun()
+
+    with st.expander("🧪 Test AI features", expanded=False):
+        from scraper import Business
+        sample = Business(
+            name="Tan Coffee", phone_number="081210 81814",
+            category="Coffee shop", reviews_average=4.6, reviews_count=2089,
+            address="Hitech City, Hyderabad", website="tancoffee.in",
+        )
+        city = "Hyderabad"
+        if st.button("Run AI on sample lead", use_container_width=True):
+            with st.spinner("Calling AI..."):
+                score = ai_mod.score_lead(sample)
+                wa = ai_mod.generate_whatsapp_message(sample, city)
+                script = ai_mod.generate_cold_call_script(sample, city)
+                research = ai_mod.research_lead(sample) if configured else "(disabled — no API key)"
+            st.markdown(f"**Score** (`{score['source']}`): {score['score']}/10 — {score['reason']}")
+            st.markdown(f"**WhatsApp message:**\n\n> {wa}")
+            st.markdown(f"**Cold-call script:**\n\n> {script}")
+            if research:
+                st.markdown(f"**Research:**\n\n{research}")

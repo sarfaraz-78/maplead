@@ -473,6 +473,142 @@ def test_database_query_all_spans_sources():
 
 
 # ---------------------------------------------------------------------------
+# AI module (ai.py)
+# ---------------------------------------------------------------------------
+def test_ai_heuristic_score_high_fit():
+    """Restaurant + high rating + website should score 8+."""
+    import ai as ai_mod
+    from scraper import Business
+    b = Business(name="Tan Coffee", category="Coffee shop",
+                 reviews_average=4.6, reviews_count=2000, website="x.com")
+    s = ai_mod.score_lead(b)
+    assert s["source"] == "heuristic"  # no API key in tests
+    assert s["score"] >= 7
+
+
+def test_ai_heuristic_score_low_fit():
+    """No phone, no website, no rating should score low."""
+    import ai as ai_mod
+    from scraper import Business
+    b = Business(name="X", category="Unknown")
+    s = ai_mod.score_lead(b)
+    # Heuristic base = 5, no positive signals \u2192 score should stay <= 6
+    assert s["score"] <= 6
+    assert "phone" in s["reason"].lower() or "unknown" in s["reason"].lower()
+
+
+def test_ai_whatsapp_template_fallback():
+    """Without API key, falls back to template."""
+    import ai as ai_mod
+    from scraper import Business
+    b = Business(name="Tan Coffee", category="Coffee shop")
+    msg = ai_mod.generate_whatsapp_message(b, city="Hyderabad")
+    assert "Tan Coffee" in msg
+    assert "Hyderabad" in msg
+    assert len(msg) > 20
+
+
+def test_ai_cold_call_template_fallback():
+    import ai as ai_mod
+    from scraper import Business
+    b = Business(name="Tan Coffee", category="Coffee shop")
+    script = ai_mod.generate_cold_call_script(b, city="Hyderabad")
+    assert "Tan Coffee" in script
+    assert len(script) > 20
+
+
+def test_ai_research_needs_api_key():
+    import ai as ai_mod
+    from scraper import Business
+    out = ai_mod.research_lead(Business(name="X"))
+    assert out == ""  # no key → empty
+
+
+def test_ai_is_configured_false_by_default():
+    """Without env var, AI is not configured."""
+    import os, ai as ai_mod
+    os.environ.pop("MAPLEAD_OPENAI_API_KEY", None)
+    assert ai_mod.is_configured() is False
+
+
+# ---------------------------------------------------------------------------
+# Security module (security.py)
+# ---------------------------------------------------------------------------
+def test_security_audit_log():
+    from security import DatabaseSecurity
+    import tempfile, pathlib, gc
+    tmp = tempfile.mkdtemp()
+    try:
+        db_path = pathlib.Path(tmp) / "test.db"
+        sec = DatabaseSecurity(db_path, audit_actor="test")
+        sec.audit("test_action", source="x", details="hello")
+        log = sec.get_audit_log()
+        assert len(log) == 1
+        assert log[0]["action"] == "test_action"
+        assert log[0]["actor"] == "test"
+    finally:
+        gc.collect()
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_security_read_only_blocks_writes():
+    from security import DatabaseSecurity
+    import pathlib, tempfile, gc, shutil
+    tmp = tempfile.mkdtemp()
+    try:
+        sec = DatabaseSecurity(pathlib.Path(tmp) / "test.db")
+        sec.audit("ok")
+        sec.set_read_only(True)
+        try:
+            sec.guard_write("delete")
+            raised = False
+        except PermissionError:
+            raised = True
+        assert raised
+    finally:
+        gc.collect()
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_security_backup_and_restore():
+    from security import DatabaseSecurity
+    import sqlite3, tempfile, pathlib, gc, shutil
+    tmp = tempfile.mkdtemp()
+    try:
+        db_path = pathlib.Path(tmp) / "test.db"
+        with sqlite3.connect(db_path, check_same_thread=False) as c:
+            c.execute("CREATE TABLE t (x INTEGER)")
+            c.execute("INSERT INTO t VALUES (1)")
+            c.commit()
+        sec = DatabaseSecurity(db_path)
+        backup_path = sec.backup(label="test")
+        assert backup_path.exists()
+        assert sec.restore_backup(backup_path) is True
+    finally:
+        gc.collect()
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_security_schema_hash():
+    from security import DatabaseSecurity
+    import sqlite3, tempfile, pathlib, gc, shutil
+    tmp = tempfile.mkdtemp()
+    try:
+        db_path = pathlib.Path(tmp) / "test.db"
+        with sqlite3.connect(db_path, check_same_thread=False) as c:
+            c.execute("CREATE TABLE foo (x INTEGER)")
+            c.commit()
+        sec = DatabaseSecurity(db_path)
+        h = sec.schema_hash()
+        assert len(h) == 16
+        assert sec.verify_schema_hash(h)
+    finally:
+        gc.collect()
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
