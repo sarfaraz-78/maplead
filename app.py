@@ -36,6 +36,20 @@ except ImportError:
     OR_DEFAULT_MODEL = ""
 
 # ---------------------------------------------------------------------------
+# Default values for variables used by the runner function below.
+# These get populated in the sidebar before each scrape, but we set
+# safe defaults here so the runner never crashes with NameError if
+# the user clicks "Get Leads" before the sidebar has rendered.
+# ---------------------------------------------------------------------------
+import os as _os_defaults
+_os_defaults.environ.setdefault("MAPLEAD_OPENAI_API_KEY", "")
+_os_defaults.environ.setdefault("OPENROUTER_API_KEY", "")
+enable_ai: bool = False
+openrouter_key: str = ""
+ai_model_id: str = ""
+ai_operations: list = []
+
+# ---------------------------------------------------------------------------
 # Page config
 # ---------------------------------------------------------------------------
 
@@ -415,6 +429,52 @@ if page == PAGE_SCRAPE:
             require_website = st.checkbox("Must have website")
             require_phone = st.checkbox("Must have phone")
 
+    # ---- AI enrichment panel (sets MAPLEAD_AI_CFG in session_state) ----
+    with st.expander("🤖 AI enrichment (optional)", expanded=False):
+        from provider_detect import detect_provider, mask_key
+        _ai_existing_key = st.session_state.get("MAPLEAD_OPENAI_API_KEY", "")
+        _ai_enable = st.checkbox(
+            "Enable AI scoring/outreach after scraping",
+            value=bool(_ai_existing_key),
+            help="Uses OpenRouter (or any compatible provider) to score leads and/or generate outreach.",
+        )
+        _ai_key_input = st.text_input(
+            "AI API key",
+            value=_ai_existing_key,
+            type="password",
+            placeholder="sk-or-v1-... (auto-detects provider)",
+            help="Auto-detects OpenRouter, Anthropic, OpenAI, Groq, Together, Fireworks. Not stored on disk.",
+        )
+        if _ai_key_input:
+            _prov = detect_provider(_ai_key_input)
+            if _prov:
+                st.caption(f"🔎 Detected: **{_prov.name}** → `{_prov.base_url}`")
+            else:
+                st.caption("⚠️ Unknown key format — will default to OpenRouter")
+
+        _ai_model = st.text_input(
+            "Model (optional, leave blank for provider default)",
+            value="",
+            placeholder="qwen/qwen3.7-flash",
+        )
+        _ai_ops = st.multiselect(
+            "AI operations",
+            options=["score", "outreach", "category"],
+            default=["score"],
+            format_func=lambda x: {"score": "🎯 Score", "outreach": "✉️ Outreach", "category": "🏷️ Categorize"}[x],
+        )
+        # Save to session_state
+        st.session_state["MAPLEAD_AI_CFG"] = {
+            "enabled": _ai_enable and bool(_ai_key_input),
+            "api_key": _ai_key_input,
+            "model": _ai_model or "",
+            "operations": _ai_ops,
+        }
+        if _ai_enable and _ai_key_input:
+            st.success(f"✅ AI enabled — key `{mask_key(_ai_key_input)}`")
+        elif _ai_enable:
+            st.warning("Enable needs an API key")
+
     run = st.button("🚀 Get Leads", type="primary", use_container_width=True)
 
 
@@ -518,8 +578,25 @@ if page == PAGE_SCRAPE:
                     elif backend_name in ("justdial", "indiamart") and apify_key:
                         os.environ["APIFY_API_KEY"] = apify_key
 
-                    if enable_ai and openrouter_key:
-                        os.environ["OPENROUTER_API_KEY"] = openrouter_key
+                    # Pull AI config from session_state so we don't depend
+                    # on sidebar-scope variables that may be undefined.
+                    _ai_cfg = st.session_state.get("MAPLEAD_AI_CFG", {}) or {}
+                    _ai_key = (
+                        _ai_cfg.get("api_key")
+                        or st.session_state.get("MAPLEAD_OPENAI_API_KEY", "")
+                        or os.environ.get("OPENROUTER_API_KEY", "")
+                    )
+                    _ai_enabled = _ai_cfg.get("enabled", False)
+                    _ai_model = (
+                        _ai_cfg.get("model")
+                        or st.session_state.get("MAPLEAD_OPENAI_MODEL", "")
+                        or "qwen/qwen3.7-flash"
+                    )
+                    _ai_ops = _ai_cfg.get("operations") or ["score"]
+
+                    if _ai_enabled and _ai_key:
+                        os.environ["OPENROUTER_API_KEY"] = _ai_key
+                        os.environ["MAPLEAD_OPENAI_API_KEY"] = _ai_key
 
                     backend = get_backend(backend_name)
                     result = await backend.scrape(
@@ -531,13 +608,20 @@ if page == PAGE_SCRAPE:
                     )
 
                     # AI enrichment step (optional, runs after scrape)
-                    if enable_ai and AIEnricher is not None and ai_operations and result and result.business_list:
+                    if (
+                        _ai_enabled
+                        and AIEnricher is not None
+                        and _ai_key
+                        and _ai_ops
+                        and result
+                        and result.business_list
+                    ):
                         try:
-                            enricher = AIEnricher(api_key=openrouter_key, model=ai_model_id)
+                            enricher = AIEnricher(api_key=_ai_key, model=_ai_model)
                             total_biz = len(result.business_list)
                             for i in range(total_biz):
                                 await update(total_biz + i + 1, total_biz * 2)
-                            await enricher.enrich_batch(result.business_list, ai_operations)
+                            await enricher.enrich_batch(result.business_list, _ai_ops)
                             await update(total_biz * 2, total_biz * 2)
                         except Exception as ai_exc:
                             logger.warning("AI enrichment failed: %s", ai_exc)
