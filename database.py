@@ -456,6 +456,7 @@ class LeadDB:
         search: Optional[str] = None,
         has_phone: Optional[bool] = None,
         min_rating: Optional[float] = None,
+        order_by: str = "last_seen DESC",
         limit: int = 1000,
     ) -> list[Lead]:
         """Search across ALL sources. Each lead is tagged with its source."""
@@ -470,11 +471,20 @@ class LeadDB:
                 search=search,
                 has_phone=has_phone,
                 min_rating=min_rating,
+                order_by=order_by,
                 limit=limit,
             )
             all_leads.extend(leads)
-        # Sort by last_seen DESC across all
-        all_leads.sort(key=lambda l: l.last_seen, reverse=True)
+        # Final safety sort (each source's table sort is already applied, but
+        # we cross-source-sort too).
+        allowed = {"last_seen DESC", "last_seen ASC", "rating DESC", "rating ASC",
+                   "name ASC", "name DESC", "first_seen DESC", "times_seen DESC"}
+        if order_by not in allowed:
+            order_by = "last_seen DESC"
+        col = order_by.split()[0]
+        reverse = order_by.endswith("DESC")
+        # Some columns like rating/reviews_count may be None — sort with None last
+        all_leads.sort(key=lambda l: (getattr(l, col) is None, getattr(l, col, None)), reverse=reverse)
         return all_leads[:limit]
 
     def get(self, lead_id: int, source: str) -> Optional[Lead]:
