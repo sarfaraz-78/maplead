@@ -101,9 +101,13 @@ class Lead:
     backend: Optional[str]
     status: str
     notes: Optional[str]
-    first_seen: str
-    last_seen: str
-    times_seen: int
+    ai_score: Optional[int] = None
+    ai_score_reason: Optional[str] = None
+    ai_research: Optional[str] = None
+    ai_qualified: Optional[str] = None
+    first_seen: str = ""
+    last_seen: str = ""
+    times_seen: int = 1
 
 
 def _row_to_lead(row: sqlite3.Row, source: str) -> Lead:
@@ -126,6 +130,10 @@ def _row_to_lead(row: sqlite3.Row, source: str) -> Lead:
         "backend": row["backend"] if "backend" in keys else None,
         "status": row["status"] if "status" in keys else "New",
         "notes": row["notes"] if "notes" in keys else None,
+        "ai_score": row["ai_score"] if "ai_score" in keys else None,
+        "ai_score_reason": row["ai_score_reason"] if "ai_score_reason" in keys else None,
+        "ai_research": row["ai_research"] if "ai_research" in keys else None,
+        "ai_qualified": row["ai_qualified"] if "ai_qualified" in keys else None,
         "first_seen": row["first_seen"] if "first_seen" in keys else "",
         "last_seen": row["last_seen"] if "last_seen" in keys else "",
         "times_seen": row["times_seen"] if "times_seen" in keys else 1,
@@ -162,6 +170,12 @@ def _create_leads_table_sql(table: str) -> str:
             backend         TEXT,
             status          TEXT NOT NULL DEFAULT 'New',
             notes           TEXT,
+            ai_score        INTEGER,
+            ai_score_reason TEXT,
+            ai_research     TEXT,
+            ai_qualified    TEXT,
+            ai_qualified_at TEXT,
+            deleted_at      TEXT,
             first_seen      TEXT NOT NULL,
             last_seen       TEXT NOT NULL,
             times_seen      INTEGER NOT NULL DEFAULT 1,
@@ -539,6 +553,59 @@ class LeadDB:
             qmarks = ",".join("?" for _ in lead_ids)
             cur = c.execute(f"DELETE FROM {table} WHERE id IN ({qmarks})", lead_ids)
             return cur.rowcount
+
+    # ---------- AI scoring ----------
+    def set_ai_score(
+        self,
+        lead_id: int,
+        source: str,
+        score: int,
+        reason: str,
+        research: Optional[str] = None,
+        qualified: Optional[str] = None,
+    ) -> None:
+        """Persist an AI score (+ optional research + qualification) for one lead."""
+        table = _table_for_source(source)
+        now = datetime.now().isoformat(timespec="seconds")
+        with self._conn() as c:
+            c.execute(
+                f"""UPDATE {table} SET
+                    ai_score=?, ai_score_reason=?,
+                    ai_research=COALESCE(?, ai_research),
+                    ai_qualified=COALESCE(?, ai_qualified),
+                    ai_qualified_at=?, last_seen=?
+                WHERE id=?""",
+                (score, reason, research, qualified, now, now, lead_id),
+            )
+
+    def bulk_set_ai_scores(self, items: list[dict], source: str) -> int:
+        """Bulk-update AI scores. Each item: {id, score, reason, research?, qualified?}."""
+        if not items:
+            return 0
+        table = _table_for_source(source)
+        now = datetime.now().isoformat(timespec="seconds")
+        with self._conn() as c:
+            n = 0
+            for it in items:
+                cur = c.execute(
+                    f"""UPDATE {table} SET
+                        ai_score=?, ai_score_reason=?,
+                        ai_research=COALESCE(?, ai_research),
+                        ai_qualified=COALESCE(?, ai_qualified),
+                        ai_qualified_at=?, last_seen=?
+                    WHERE id=?""",
+                    (
+                        it["score"], it.get("reason", ""),
+                        it.get("research"), it.get("qualified"),
+                        now, now, it["id"],
+                    ),
+                )
+                n += cur.rowcount
+        return n
+
+    def get_leads_to_score(self, source: str, limit: int = 100) -> list[Lead]:
+        """Get leads that haven't been AI-scored yet (or all if you want re-scoring)."""
+        return self.query(source=source, limit=limit)
 
     # ---------- contacts ----------
     def add_contact(self, lead_id: int, source: str, kind: str, summary: str = "") -> int:

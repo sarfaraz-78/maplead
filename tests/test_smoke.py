@@ -472,6 +472,44 @@ def test_database_query_all_spans_sources():
         assert len(found) == 1
 
 
+def test_database_set_ai_score():
+    from database import LeadDB
+    from scraper import Business
+    import tempfile, pathlib
+    with tempfile.TemporaryDirectory() as tmp:
+        db = LeadDB(pathlib.Path(tmp) / "test.db")
+        db.upsert_many([Business(name="X", phone_number="12345")], source_query="s", backend="x")
+        lead = db.query(source="s")[0]
+        db.set_ai_score(lead.id, "s", score=8, reason="Great fit",
+                        research="Local coffee chain", qualified="hot")
+        updated = db.get(lead.id, "s")
+        assert updated.ai_score == 8
+        assert updated.ai_score_reason == "Great fit"
+        assert updated.ai_research == "Local coffee chain"
+        assert updated.ai_qualified == "hot"
+
+
+def test_database_bulk_set_ai_scores():
+    from database import LeadDB
+    from scraper import Business
+    import tempfile, pathlib
+    with tempfile.TemporaryDirectory() as tmp:
+        db = LeadDB(pathlib.Path(tmp) / "test.db")
+        for i in range(3):
+            db.upsert_many([Business(name=f"X{i}", phone_number=f"123456789{i}")],
+                           source_query="s", backend="x")
+        leads = db.query(source="s")
+        updates = [
+            {"id": l.id, "score": 7 + i, "reason": f"reason {i}"}
+            for i, l in enumerate(leads)
+        ]
+        n = db.bulk_set_ai_scores(updates, "s")
+        assert n == 3
+        refreshed = db.query(source="s")
+        scores = sorted(l.ai_score for l in refreshed)
+        assert scores == [7, 8, 9]
+
+
 # ---------------------------------------------------------------------------
 # AI module (ai.py)
 # ---------------------------------------------------------------------------
@@ -529,6 +567,59 @@ def test_ai_is_configured_false_by_default():
     import os, ai as ai_mod
     os.environ.pop("MAPLEAD_OPENAI_API_KEY", None)
     assert ai_mod.is_configured() is False
+
+
+def test_ai_email_template_fallback():
+    """Without API key, email falls back to template."""
+    import ai as ai_mod
+    from scraper import Business
+    b = Business(name="Tan Coffee", category="Coffee shop")
+    email = ai_mod.generate_email(b, city="Hyderabad")
+    assert "Subject:" in email
+    assert "Tan Coffee" in email
+
+
+def test_ai_variants_template_fallback():
+    import ai as ai_mod
+    from scraper import Business
+    b = Business(name="Tan Coffee", category="Coffee shop")
+    variants = ai_mod.generate_variants(b, "whatsapp", city="Hyderabad")
+    assert len(variants) >= 1
+    assert "Tan Coffee" in variants[0]["message"]
+
+
+def test_ai_qualify_needs_api_key():
+    import ai as ai_mod
+    from scraper import Business
+    qual = ai_mod.qualify_lead(Business(name="X"))
+    assert qual.get("qualified") == "unknown"
+
+
+def test_ai_suggest_queries_fallback():
+    import ai as ai_mod
+    result = ai_mod.suggest_queries("Hyderabad", "restaurants")
+    assert "queries" in result
+    assert len(result["queries"]) >= 5
+    assert all("query" in q for q in result["queries"])
+
+
+def test_ai_estimate_cost_known_model():
+    import ai as ai_mod
+    import os
+    os.environ["MAPLEAD_OPENAI_MODEL"] = "openai/gpt-4o-mini"
+    cost = ai_mod.estimate_cost(1000, 500)
+    assert cost is not None
+    assert "total_usd" in cost
+    assert cost["total_usd"] > 0
+
+
+def test_ai_openrouter_auto_detect():
+    """When key starts with sk-or-, default base URL should be OpenRouter."""
+    import os, ai as ai_mod
+    os.environ["MAPLEAD_OPENAI_API_KEY"] = "sk-or-v1-fake-test-key"
+    os.environ.pop("MAPLEAD_OPENAI_BASE_URL", None)
+    assert ai_mod.is_openrouter() is True
+    assert "openrouter" in ai_mod.get_base_url()
 
 
 # ---------------------------------------------------------------------------

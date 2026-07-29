@@ -1172,25 +1172,64 @@ elif page == PAGE_DB:
                             google_maps_url=lead.google_maps_url,
                         )
                         st.markdown("**🤖 AI helpers:**")
-                        ac1, ac2, ac3 = st.columns(3)
+                        # Show persisted score if any
+                        if lead.ai_score is not None:
+                            st.success(f"💾 Persisted AI score: **{lead.ai_score}/10** — {lead.ai_score_reason}")
+                        ac1, ac2, ac3, ac4 = st.columns(4)
+                        city = lead.source.split(" in ")[-1] if " in " in lead.source else "your city"
                         with ac1:
                             if st.button("📊 Score", key=f"ai_score_{lead.source}_{lead.id}",
                                          use_container_width=True):
                                 with st.spinner("Scoring…"):
                                     s = ai_mod.score_lead(ai_biz)
+                                # Persist
+                                db.set_ai_score(lead.id, lead.source, s["score"], s["reason"])
                                 st.info(f"**{s['score']}/10** — {s['reason']}\n\n*({s['source']})*")
+                                sec.audit("ai_score", source=lead.source,
+                                          details=f"lead_id={lead.id} score={s['score']}")
+                                st.rerun()
                         with ac2:
-                            if st.button("💬 WhatsApp", key=f"ai_wa_{lead.source}_{lead.id}",
+                            if st.button("💬 WhatsApp (3 variants)", key=f"ai_var_{lead.source}_{lead.id}",
                                          use_container_width=True):
-                                with st.spinner("Drafting…"):
-                                    msg = ai_mod.generate_whatsapp_message(ai_biz, city=lead.source.split(" in ")[-1] if " in " in lead.source else "your city")
-                                st.code(msg)
+                                with st.spinner("Drafting 3 variants…"):
+                                    variants = ai_mod.generate_variants(ai_biz, "whatsapp", city)
+                                for i, v in enumerate(variants, 1):
+                                    st.markdown(f"**Variant {i}** ({v.get('angle','?')}):\n\n> {v.get('message','')}")
                         with ac3:
-                            if st.button("📞 Cold call", key=f"ai_cc_{lead.source}_{lead.id}",
+                            if st.button("📧 Email", key=f"ai_email_{lead.source}_{lead.id}",
+                                         use_container_width=True):
+                                with st.spinner("Drafting email…"):
+                                    email = ai_mod.generate_email(ai_biz, city)
+                                st.code(email)
+                        with ac4:
+                            if st.button("🎯 Qualify", key=f"ai_qual_{lead.source}_{lead.id}",
+                                         use_container_width=True):
+                                with st.spinner("Qualifying…"):
+                                    qual = ai_mod.qualify_lead(ai_biz, city)
+                                if "score" in qual:
+                                    db.set_ai_score(lead.id, lead.source,
+                                                    qual.get("score", 0),
+                                                    qual.get("best_pitch", ""),
+                                                    qualified=qual.get("qualified"))
+                                st.json(qual)
+
+                        # Cold call script + research as a row below
+                        rc1, rc2 = st.columns(2)
+                        with rc1:
+                            if st.button("📞 Cold call script", key=f"ai_cc_{lead.source}_{lead.id}",
                                          use_container_width=True):
                                 with st.spinner("Drafting…"):
-                                    script = ai_mod.generate_cold_call_script(ai_biz, city=lead.source.split(" in ")[-1] if " in " in lead.source else "your city")
+                                    script = ai_mod.generate_cold_call_script(ai_biz, city)
                                 st.code(script)
+                        with rc2:
+                            if st.button("🔍 Research", key=f"ai_re_{lead.source}_{lead.id}",
+                                         use_container_width=True):
+                                with st.spinner("Researching…"):
+                                    research = ai_mod.research_lead(ai_biz)
+                                if research:
+                                    st.markdown(research)
+                                else:
+                                    st.caption("No API key configured — research unavailable.")
 
                         st.markdown("**Contact log:**")
                         contacts = db.contacts_for(lead.id, lead.source)
@@ -1396,29 +1435,79 @@ elif page == PAGE_SETTINGS:
 
     st.divider()
 
-    # ---- AI config
+    # ---- AI config (OpenRouter-first)
     st.markdown("### 🤖 AI features")
     st.caption(
-        "Optional. Connect any OpenAI-compatible API to unlock lead scoring, "
-        "WhatsApp message generation, cold-call scripts, and lead research. "
-        "Works with OpenAI, DeepSeek, Groq, Together, Ollama, LM Studio, etc."
+        "Powered by OpenRouter — one key unlocks Claude, GPT-4o, Gemini, "
+        "Llama, DeepSeek and 100+ other models. Also works with any OpenAI-"
+        "compatible endpoint (DeepSeek, Groq, Together, Ollama, LM Studio)."
     )
 
     configured = ai_mod.is_configured()
     if configured:
-        st.success("✅ AI configured — features enabled")
-        st.caption(f"Model: `{ai_mod.get_model()}` • Endpoint: `{ai_mod.get_base_url()}`")
+        endpoint = ai_mod.get_base_url()
+        if ai_mod.is_openrouter():
+            st.success("✅ AI configured — OpenRouter active")
+        else:
+            st.success(f"✅ AI configured — custom endpoint: {endpoint}")
+        st.caption(f"Model: `{ai_mod.get_model()}`")
     else:
         st.warning("⚠️ No API key configured — AI features will use built-in templates")
 
+    # ---- Quick presets
+    st.markdown("**Quick presets:**")
+    pc1, pc2, pc3 = st.columns(3)
+    with pc1:
+        if st.button("🎯 OpenRouter (Claude 3.5 Sonnet)", use_container_width=True,
+                     help="Best quality for cold outreach drafting"):
+            import os as _os
+            _os.environ["MAPLEAD_OPENAI_BASE_URL"] = "https://openrouter.ai/api/v1"
+            _os.environ["MAPLEAD_OPENAI_MODEL"] = "anthropic/claude-3.5-sonnet"
+            st.success("Preset applied")
+            st.rerun()
+    with pc2:
+        if st.button("⚡ OpenRouter (GPT-4o mini)", use_container_width=True,
+                     help="Best value for bulk scoring 1000s of leads"):
+            import os as _os
+            _os.environ["MAPLEAD_OPENAI_BASE_URL"] = "https://openrouter.ai/api/v1"
+            _os.environ["MAPLEAD_OPENAI_MODEL"] = "openai/gpt-4o-mini"
+            st.success("Preset applied")
+            st.rerun()
+    with pc3:
+        if st.button("🆓 OpenRouter (Llama 3.2 free)", use_container_width=True,
+                     help="Free tier via OpenRouter — slower but no cost"):
+            import os as _os
+            _os.environ["MAPLEAD_OPENAI_BASE_URL"] = "https://openrouter.ai/api/v1"
+            _os.environ["MAPLEAD_OPENAI_MODEL"] = "meta-llama/llama-3.2-3b-instruct:free"
+            st.success("Preset applied")
+            st.rerun()
+
     with st.form("ai_config"):
-        st.markdown("**Update configuration**")
-        new_key = st.text_input("API key", type="password",
+        st.markdown("**Manual configuration**")
+        new_key = st.text_input("API key (paste your OpenRouter sk-or-v1-…)",
+                                type="password",
                                 help="Stored only for this session, never written to disk.")
+        # Model picker with presets
+        model_options = [m["id"] for m in ai_mod.POPULAR_MODELS] + ["(custom)"]
+        current = ai_mod.get_model()
+        if current not in model_options:
+            model_options.insert(-1, current)
+        chosen = st.selectbox("Model", model_options,
+                              index=model_options.index(current) if current in model_options else 0,
+                              help="Popular OpenRouter models. Pick '(custom)' to type your own.")
+        if chosen == "(custom)":
+            new_model = st.text_input("Custom model ID", value=current,
+                                      help="e.g. anthropic/claude-3.5-sonnet, openai/gpt-4o-mini")
+        else:
+            new_model = chosen
+            # Show pricing hint
+            cur = next((m for m in ai_mod.POPULAR_MODELS if m["id"] == chosen), None)
+            if cur:
+                st.caption(
+                    f"💰 {cur['label']} — ${cur['input']}/M input, ${cur['output']}/M output"
+                )
         new_url = st.text_input("Base URL", value=ai_mod.get_base_url(),
-                                help="Default: OpenAI. Examples: DeepSeek, Groq, Ollama.")
-        new_model = st.text_input("Model", value=ai_mod.get_model(),
-                                  help="e.g. gpt-4o-mini, deepseek-chat, llama3.1")
+                                help="Default: OpenRouter if key starts with sk-or-")
         submitted = st.form_submit_button("Save for this session")
         if submitted:
             import os as _os
@@ -1428,9 +1517,73 @@ elif page == PAGE_SETTINGS:
                 _os.environ["MAPLEAD_OPENAI_BASE_URL"] = new_url
             if new_model:
                 _os.environ["MAPLEAD_OPENAI_MODEL"] = new_model
-            st.success("Saved for this session. Re-open Database page to test.")
+            st.success("Saved. Re-open Database page to test.")
             st.rerun()
 
+    # ---- Bulk AI scoring
+    st.divider()
+    st.markdown("### 🧮 Bulk AI scoring")
+    st.caption("Score every lead in a source at once. Results are saved to the DB.")
+    sources_for_scoring = db.list_sources() if db else []
+    if sources_for_scoring:
+        import pandas as pd
+        src_pick = st.selectbox(
+            "Pick a source to bulk-score",
+            options=[s.name for s in sources_for_scoring],
+            key="bulk_score_src",
+        )
+        n_leads = next((s.lead_count for s in sources_for_scoring if s.name == src_pick), 0)
+        cost = ai_mod.estimate_cost(n_leads * 250, n_leads * 80)
+        st.caption(
+            f"~{n_leads} leads · est. cost: "
+            + (f"${cost['total_usd']:.4f}" if cost else "unknown model")
+        )
+        if st.button(f"🚀 Score all {n_leads} leads in '{src_pick}'", type="primary"):
+            progress = st.progress(0.0, text="Scoring leads…")
+            leads = db.query(source=src_pick, limit=10_000)
+            updates = []
+            for i, lead in enumerate(leads):
+                from scraper import Business as _Biz
+                biz = _Biz(name=lead.name, address=lead.address, phone_number=lead.phone,
+                           category=lead.category, website=lead.website,
+                           reviews_average=lead.rating, reviews_count=lead.reviews_count,
+                           google_maps_url=lead.google_maps_url)
+                s = ai_mod.score_lead(biz)
+                updates.append({"id": lead.id, "score": s["score"], "reason": s["reason"]})
+                if i % 10 == 0:
+                    progress.progress((i + 1) / max(len(leads), 1),
+                                      text=f"Scored {i + 1}/{len(leads)} ({s['source']})")
+            n = db.bulk_set_ai_scores(updates, src_pick)
+            sec.audit("bulk_score", source=src_pick, details=f"{n} leads scored")
+            progress.progress(1.0, text="Done!")
+            st.success(f"✅ Scored {n} leads in '{src_pick}'")
+            st.rerun()
+    else:
+        st.caption("No sources yet. Scrape something first.")
+
+    # ---- Campaign strategist
+    st.divider()
+    st.markdown("### 🎯 Campaign strategist")
+    st.caption("Tell the AI your city + industry — get 5 smart Google Maps queries to run.")
+    cs1, cs2 = st.columns(2)
+    with cs1:
+        cs_city = st.text_input("City", value="Hyderabad", key="strat_city")
+    with cs2:
+        cs_industry = st.text_input("Industry / category", value="signage",
+                                    key="strat_industry",
+                                    help="e.g. 'restaurants', 'signage', 'jewellery shops'")
+    if st.button("✨ Suggest 5 best queries", use_container_width=True):
+        with st.spinner("Thinking…"):
+            result = ai_mod.suggest_queries(cs_city, cs_industry)
+        if result.get("advice"):
+            st.info(f"**Strategy:** {result['advice']}")
+        for q in result.get("queries", []):
+            with st.expander(f"🔎 {q['query']}", expanded=False):
+                st.write(f"**Why:** {q.get('why', '—')}")
+                st.write(f"**Expected volume:** {q.get('expected_volume', '—')}")
+
+    # ---- Test panel
+    st.divider()
     with st.expander("🧪 Test AI features", expanded=False):
         from scraper import Business
         sample = Business(
@@ -1444,9 +1597,18 @@ elif page == PAGE_SETTINGS:
                 score = ai_mod.score_lead(sample)
                 wa = ai_mod.generate_whatsapp_message(sample, city)
                 script = ai_mod.generate_cold_call_script(sample, city)
-                research = ai_mod.research_lead(sample) if configured else "(disabled — no API key)"
+                email = ai_mod.generate_email(sample, city)
+                variants = ai_mod.generate_variants(sample, "whatsapp", city)
+                qual = ai_mod.qualify_lead(sample, city)
+                research = ai_mod.research_lead(sample) if configured else ""
             st.markdown(f"**Score** (`{score['source']}`): {score['score']}/10 — {score['reason']}")
-            st.markdown(f"**WhatsApp message:**\n\n> {wa}")
-            st.markdown(f"**Cold-call script:**\n\n> {script}")
+            st.markdown(f"**WhatsApp:**\n\n> {wa}")
+            st.markdown(f"**Cold call:**\n\n> {script}")
+            st.markdown(f"**Email:**\n\n```\n{email}\n```")
+            st.markdown(f"**3 variants:**")
+            for i, v in enumerate(variants, 1):
+                st.markdown(f"  {i}. *({v.get('angle', '')})* — {v.get('message', '')}")
+            if qual:
+                st.markdown(f"**Qualification:**\n\n```json\n{qual}\n```")
             if research:
                 st.markdown(f"**Research:**\n\n{research}")
