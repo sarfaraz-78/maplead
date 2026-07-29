@@ -1102,6 +1102,8 @@ elif page == PAGE_DB:
 # Stats page
 # ---------------------------------------------------------------------------
 elif page == PAGE_STATS:
+    from database import STATUSES
+
     st.markdown("## 📊 Lead Database Stats")
     db = get_db()
     s = db.stats()
