@@ -210,6 +210,182 @@ def test_export_excel_by_source_sheets():
 
 
 # ---------------------------------------------------------------------------
+# Features module (features.py)
+# ---------------------------------------------------------------------------
+def test_phone_digits_only():
+    from features import phone_digits_only
+    assert phone_digits_only("+91 98765 43210") == "919876543210"
+    assert phone_digits_only("081210-81814") == "08121081814"
+    assert phone_digits_only(None) == ""
+    assert phone_digits_only("") == ""
+
+
+def test_format_phone_in():
+    from features import format_phone_in, normalize_phone
+    # 10-digit mobile
+    assert format_phone_in("9876543210") == "+91 98765 43210"
+    # Already formatted
+    assert format_phone_in("+91 98765 43210") == "+91 98765 43210"
+    # 11-digit with 0 prefix
+    assert format_phone_in("09876543210") == "+91 98765 43210"
+    # 12-digit with 91 prefix
+    assert format_phone_in("919876543210") == "+91 98765 43210"
+    # Landline (040 = Hyderabad STD) — normalizer drops trunk 0, formatter splits 4-6
+    assert format_phone_in("04044212120") == "+91 4044 212120"
+    # None / empty
+    assert format_phone_in(None) == ""
+    assert format_phone_in("") == ""
+    # Normalize collapses country-code variants to same key
+    assert normalize_phone("9876543210") == normalize_phone("+91 98765 43210")
+    assert normalize_phone("9876543210") == normalize_phone("919876543210")
+
+
+def test_whatsapp_url():
+    from features import whatsapp_url
+    url = whatsapp_url("9876543210", message="Hi from XYZ signage")
+    assert url.startswith("https://wa.me/919876543210?text=")
+    assert "Hi%20from%20XYZ%20signage" in url
+    # Already with +91
+    url2 = whatsapp_url("+91 98765 43210", message="")
+    assert url2.startswith("https://wa.me/919876543210?text=")
+    # Empty phone → empty URL
+    assert whatsapp_url("") == ""
+    assert whatsapp_url(None) == ""
+
+
+def test_dedupe_by_phone():
+    from features import dedupe_by_phone, Business
+    a = Business(name="Tan Coffee", phone_number="9876543210")
+    b = Business(name="Tan Coffee (dup)", phone_number="+91 98765 43210")  # same phone, different format
+    c = Business(name="Other", phone_number="5555555555")
+    d = Business(name="NoPhone", phone_number=None)
+    result = dedupe_by_phone([a, b, c, d])
+    assert len(result) == 3  # b dropped as dup
+    names = [r.name for r in result]
+    assert "Tan Coffee" in names
+    assert "Tan Coffee (dup)" not in names
+    assert "NoPhone" in names  # no-phone leads kept
+
+
+def test_render_script():
+    from features import render_script
+    out = render_script("Cold call (signage intro)", "Tan Coffee", "Coffee shop", "Hyderabad")
+    assert "Tan Coffee" in out
+    assert "Coffee shop" in out
+    assert "Hyderabad" in out
+
+
+def test_source_stats():
+    from features import source_stats, Business
+    a = Business(name="A", phone_number="1"); a.__dict__["source_query"] = "hotels"
+    b = Business(name="B"); b.__dict__["source_query"] = "hotels"
+    c = Business(name="C", reviews_average=4.0); c.__dict__["source_query"] = "cafes"
+    stats = source_stats([a, b, c])
+    assert stats[0]["source"] == "hotels"  # sorted by count desc
+    assert stats[0]["total"] == 2
+    assert stats[0]["with_phone"] == 1
+    assert stats[0]["with_rating"] == 0
+    assert stats[1]["source"] == "cafes"
+
+
+def test_lead_store_lifecycle():
+    from features import LeadStore, Business
+    import tempfile, pathlib
+    with tempfile.TemporaryDirectory() as tmp:
+        store = LeadStore(pathlib.Path(tmp) / "test.db")
+        b = Business(name="Tan Coffee", phone_number="9876543210", address="Hitech City")
+        key = LeadStore.make_key(b)
+        store.upsert(key, name=b.name, address=b.address, phone=b.phone_number,
+                     status="Contacted", note="Will call back Mon")
+        got = store.get(key)
+        assert got["status"] == "Contacted"
+        assert got["note"] == "Will call back Mon"
+        # Update same key
+        store.upsert(key, name=b.name, address=b.address, phone=b.phone_number, status="Interested")
+        got2 = store.get(key)
+        assert got2["status"] == "Interested"
+        # Stats
+        s = store.stats()
+        assert s["Interested"] == 1
+        assert s["New"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Database module (database.py)
+# ---------------------------------------------------------------------------
+def test_database_upsert_and_query():
+    from database import LeadDB
+    from scraper import Business
+    import tempfile, pathlib
+    with tempfile.TemporaryDirectory() as tmp:
+        db = LeadDB(pathlib.Path(tmp) / "test.db")
+        b1 = Business(name="Tan Coffee", phone_number="+91 98765 43210", reviews_average=4.6)
+        b2 = Business(name="Other", phone_number=None)
+        s = db.upsert_many([b1, b2], source_query="test", backend="botasaurus")
+        assert s["inserted"] == 2
+        # Re-insert same — updates times_seen
+        s2 = db.upsert_many([b1], source_query="test", backend="botasaurus")
+        assert s2["inserted"] == 0
+        # Query with status as string (not list)
+        leads = db.query(status="New")
+        assert len(leads) == 2
+        # Search by name
+        found = db.query(search="Tan")
+        assert len(found) == 1
+        assert found[0].name == "Tan Coffee"
+        # Search by source
+        by_src = db.query(source="test")
+        assert len(by_src) == 2
+
+
+def test_database_status_lifecycle():
+    from database import LeadDB
+    from scraper import Business
+    import tempfile, pathlib
+    with tempfile.TemporaryDirectory() as tmp:
+        db = LeadDB(pathlib.Path(tmp) / "test.db")
+        b = Business(name="X", phone_number="12345")
+        db.upsert_many([b], source_query="t", backend="x")
+        lead_id = db.query()[0].id
+        db.set_status(lead_id, "Contacted", note="call back Mon")
+        lead = db.get(lead_id)
+        assert lead.status == "Contacted"
+        assert lead.notes == "call back Mon"
+
+
+def test_database_contacts():
+    from database import LeadDB
+    from scraper import Business
+    import tempfile, pathlib
+    with tempfile.TemporaryDirectory() as tmp:
+        db = LeadDB(pathlib.Path(tmp) / "test.db")
+        b = Business(name="X", phone_number="12345")
+        db.upsert_many([b], source_query="t", backend="x")
+        lead_id = db.query()[0].id
+        db.add_contact(lead_id, "call", "Spoke 5 min")
+        db.add_contact(lead_id, "whatsapp", "Sent details")
+        contacts = db.contacts_for(lead_id)
+        assert len(contacts) == 2
+
+
+def test_database_stats_and_export():
+    from database import LeadDB, STATUSES
+    from scraper import Business
+    import tempfile, pathlib
+    with tempfile.TemporaryDirectory() as tmp:
+        db = LeadDB(pathlib.Path(tmp) / "test.db")
+        for i in range(3):
+            db.upsert_many([Business(name=f"X{i}", phone_number=f"123456789{i}")],
+                           source_query="test", backend="botasaurus")
+        stats = db.stats()
+        assert stats["total"] == 3
+        assert stats["with_phone"] == 3
+        assert stats["by_status"]["New"] == 3
+        csv = db.export_to_csv_bytes()
+        assert b"X0" in csv and b"X1" in csv and b"X2" in csv
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
