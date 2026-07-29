@@ -45,6 +45,12 @@ class Business:
     longitude: Optional[float] = None
     google_maps_url: Optional[str] = None
     is_closed: Optional[bool] = None  # True = permanently closed; None = unknown
+    # AI enrichment fields (populated by ai_enrichment.AIEnricher)
+    ai_score: Optional[int] = None       # 0-10 lead quality
+    ai_tier: Optional[str] = None        # hot / warm / cold / skip
+    ai_reason: Optional[str] = None      # short why-scored-this-way
+    ai_outreach: Optional[str] = None    # personalized 50-word message
+    ai_category: Optional[str] = None    # short business-type tag
 
     def to_dict(self) -> dict:
         return asdict(self)

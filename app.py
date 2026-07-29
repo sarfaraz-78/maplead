@@ -28,6 +28,13 @@ except ImportError:
     get_backend = None  # type: ignore[assignment]
     ScraperBackend = None  # type: ignore[assignment, misc]
 
+try:
+    from ai_enrichment import AIEnricher, AVAILABLE_MODELS, DEFAULT_MODEL as OR_DEFAULT_MODEL
+except ImportError:
+    AIEnricher = None  # type: ignore[assignment,misc]
+    AVAILABLE_MODELS = {}  # type: ignore[assignment]
+    OR_DEFAULT_MODEL = ""
+
 # ---------------------------------------------------------------------------
 # Page config
 # ---------------------------------------------------------------------------
@@ -511,6 +518,9 @@ if page == PAGE_SCRAPE:
                     elif backend_name in ("justdial", "indiamart") and apify_key:
                         os.environ["APIFY_API_KEY"] = apify_key
 
+                    if enable_ai and openrouter_key:
+                        os.environ["OPENROUTER_API_KEY"] = openrouter_key
+
                     backend = get_backend(backend_name)
                     result = await backend.scrape(
                         search_term=search_term.strip(),
@@ -519,6 +529,19 @@ if page == PAGE_SCRAPE:
                         locale=locale,
                         progress_callback=update,
                     )
+
+                    # AI enrichment step (optional, runs after scrape)
+                    if enable_ai and AIEnricher is not None and ai_operations and result and result.business_list:
+                        try:
+                            enricher = AIEnricher(api_key=openrouter_key, model=ai_model_id)
+                            total_biz = len(result.business_list)
+                            for i in range(total_biz):
+                                await update(total_biz + i + 1, total_biz * 2)
+                            await enricher.enrich_batch(result.business_list, ai_operations)
+                            await update(total_biz * 2, total_biz * 2)
+                        except Exception as ai_exc:
+                            logger.warning("AI enrichment failed: %s", ai_exc)
+
                     return result, time.time() - start, None
                 except Exception as exc:  # noqa: BLE001
                     return None, time.time() - start, str(exc)
@@ -773,8 +796,17 @@ if page == PAGE_SCRAPE:
                     "google_maps_url": st.column_config.LinkColumn(
                         "Google Maps", width="small"
                     ),
+                    "ai_score": st.column_config.NumberColumn(
+                        "🎯 AI", format="%d", width="small",
+                        help="AI lead score (0-10)",
+                    ),
+                    "ai_tier": st.column_config.TextColumn("Tier", width="small"),
+                    "ai_reason": st.column_config.TextColumn("AI Note", width="large"),
+                    "ai_outreach": st.column_config.TextColumn("AI Outreach", width="large"),
+                    "ai_category": st.column_config.TextColumn("AI Tag", width="small"),
                     "latitude": None,
                     "longitude": None,
+                    "is_closed": None,
                 },
             )
 
