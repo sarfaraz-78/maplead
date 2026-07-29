@@ -925,7 +925,7 @@ elif page == PAGE_DB:
     c4.metric("New (uncontacted)", s["by_status"].get("New", 0))
     st.divider()
 
-    st.markdown("### \ud83d\udd0d Filter")
+    st.markdown("### 🔍 Filter")
     f1, f2, f3, f4 = st.columns(4)
     with f1:
         f_status = st.multiselect("Status", STATUSES, default=["New"])
@@ -966,9 +966,9 @@ elif page == PAGE_DB:
     st.caption(f"Showing **{len(leads)}** leads")
 
     if not leads:
-        st.info("No leads match these filters. Scrape some first via \ud83d\udd0d Scrape, or loosen filters.")
+        st.info("No leads match these filters. Scrape some first via 🔍 Scrape, or loosen filters.")
     else:
-        st.markdown("### \ud83d\udccb Results")
+        st.markdown("### 📋 Results")
         import pandas as pd
         rows = []
         for l in leads:
@@ -993,11 +993,11 @@ elif page == PAGE_DB:
             hide_index=True,
             column_config={
                 "id": None,
-                "WA": st.column_config.LinkColumn("WA", display_text="\ud83d\udc49 chat", help="Click to open WhatsApp"),
+                "WA": st.column_config.LinkColumn("WA", display_text="👉 chat", help="Click to open WhatsApp"),
             },
         )
 
-        st.markdown("### \u26a1 Bulk actions")
+        st.markdown("### ⚡ Bulk actions")
         b1, b2, b3 = st.columns(3)
         with b1:
             bulk_status = st.selectbox("Set status to", ["(choose)"] + STATUSES, key="bulk_status_sel")
@@ -1015,12 +1015,12 @@ elif page == PAGE_DB:
                 st.success(f"Tagged {len(leads)} leads with: {tags}")
                 st.rerun()
         with b3:
-            if st.button(f"\ud83d\uddd1 Delete all {len(leads)} shown", type="secondary", use_container_width=True):
+            if st.button(f"🗑 Delete all {len(leads)} shown", type="secondary", use_container_width=True):
                 n = db.delete([l.id for l in leads])
                 st.warning(f"Deleted {n} leads")
                 st.rerun()
 
-        st.markdown("### \ud83d\udd0d Lead details")
+        st.markdown("### 🔍 Lead details")
         lead_id = st.number_input(
             "Lead ID (from table above)",
             min_value=0,
@@ -1076,12 +1076,12 @@ elif page == PAGE_DB:
                 st.warning(f"No lead with id={lead_id}")
 
         st.divider()
-        st.markdown("### \ud83d\udce4 Export full database")
+        st.markdown("### 📤 Export full database")
         col1, col2 = st.columns(2)
         with col1:
             csv = db.export_to_csv_bytes()
             st.download_button(
-                "\ud83d\udcca Export all leads as CSV",
+                "📊 Export all leads as CSV",
                 data=csv,
                 file_name=f"maplead_db_{datetime.now().strftime('%Y-%m-%d')}.csv",
                 mime="text/csv",
@@ -1090,7 +1090,7 @@ elif page == PAGE_DB:
         with col2:
             stats_bytes = json.dumps(db.stats(), indent=2, default=str).encode()
             st.download_button(
-                "\ud83d\udd27 Export DB stats as JSON",
+                "🔧 Export DB stats as JSON",
                 data=stats_bytes,
                 file_name=f"maplead_stats_{datetime.now().strftime('%Y-%m-%d')}.json",
                 mime="application/json",
@@ -1102,7 +1102,7 @@ elif page == PAGE_DB:
 # Stats page
 # ---------------------------------------------------------------------------
 elif page == PAGE_STATS:
-    st.markdown("## \ud83d\udcca Lead Database Stats")
+    st.markdown("## 📊 Lead Database Stats")
     db = get_db()
     s = db.stats()
 
