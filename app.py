@@ -1354,6 +1354,7 @@ elif page == PAGE_SETTINGS:
     st.caption("Security, backups, audit log, and AI configuration.")
 
     sec = get_security()
+    db = get_db()
 
     # ---- Read-only mode
     st.markdown("### 🔒 Database protection")
@@ -1496,15 +1497,21 @@ elif page == PAGE_SETTINGS:
                               index=model_options.index(current) if current in model_options else 0,
                               help="Popular OpenRouter models. Pick '(custom)' to type your own.")
         if chosen == "(custom)":
-            new_model = st.text_input("Custom model ID", value=current,
-                                      help="e.g. anthropic/claude-3.5-sonnet, openai/gpt-4o-mini")
+            col_a, col_b = st.columns([3, 1])
+            with col_a:
+                new_model = st.text_input("Custom model ID", value=current,
+                                          help="e.g. anthropic/claude-3.5-sonnet, openai/gpt-4o-mini")
+            with col_b:
+                st.markdown("🔗 [Browse 100+ OpenRouter models →](https://openrouter.ai/models)",
+                            unsafe_allow_html=True)
         else:
             new_model = chosen
             # Show pricing hint
             cur = next((m for m in ai_mod.POPULAR_MODELS if m["id"] == chosen), None)
             if cur:
                 st.caption(
-                    f"💰 {cur['label']} — ${cur['input']}/M input, ${cur['output']}/M output"
+                    f"💰 {cur['label']} — ${cur['input']}/M input, ${cur['output']}/M output. "
+                    f"[See all models](https://openrouter.ai/models)"
                 )
         new_url = st.text_input("Base URL", value=ai_mod.get_base_url(),
                                 help="Default: OpenRouter if key starts with sk-or-")
