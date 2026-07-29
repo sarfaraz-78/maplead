@@ -44,3 +44,6 @@ payload.json
 
 .github/workflows/
 *.yml.tmp
+*.db
+*.sqlite
+*.sqlite3
