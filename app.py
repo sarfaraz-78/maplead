@@ -638,19 +638,26 @@ if page == PAGE_SCRAPE:
                         # Run enrichment (AI if working, else heuristic-only)
                         if _ai_enabled and ai_works and _ai_ops:
                             try:
-                                # Run sequentially with progress updates
+                                from ai_messages import enrich_leads_with_messages
                                 total_biz = len(result.business_list)
-                                for i, biz in enumerate(result.business_list):
-                                    if "score" in _ai_ops:
-                                        ai_instance.score_business(biz)
-                                    if "outreach" in _ai_ops:
-                                        ai_instance.outreach_for_business(biz)
-                                    if "category" in _ai_ops:
-                                        ai_instance.categorize_business(biz)
+                                # Use the new per-lead message engine for full uniqueness
+                                enrich_leads_with_messages(
+                                    result.business_list,
+                                    ai=ai_instance,
+                                    channel="email",
+                                )
+                                for i in range(total_biz):
                                     await update(total_biz + i + 1, total_biz * 2)
                             except Exception as exc:
                                 ai_err = f"{type(exc).__name__}: {exc}"
-                                logger.warning("AI batch enrich failed: %s", exc)
+                                logger.warning("AI message enrich failed: %s", exc)
+                        else:
+                            # Even without AI, generate unique template messages
+                            try:
+                                from ai_messages import enrich_leads_with_messages
+                                enrich_leads_with_messages(result.business_list, ai=None)
+                            except Exception as exc:
+                                logger.warning("Template message fill failed: %s", exc)
 
                         # ALWAYS fill any gaps with heuristic (no field ever stays blank)
                         for biz in result.business_list:
@@ -663,6 +670,13 @@ if page == PAGE_SCRAPE:
                                 biz.ai_outreach = hs.outreach
                             if not biz.ai_category:
                                 biz.ai_category = hs.category
+                            # Fill empty multi-channel messages with template fallback
+                            if not biz.ai_body_email:
+                                biz.ai_body_email = hs.outreach
+                            if not biz.ai_subject:
+                                biz.ai_subject = f"Quick note for {biz.name or 'you'}"
+                            if not biz.ai_whatsapp:
+                                biz.ai_whatsapp = hs.outreach.split("\n")[0] if hs.outreach else ""
 
                         # Save status for UI
                         st.session_state["LAST_AI_STATUS"] = {

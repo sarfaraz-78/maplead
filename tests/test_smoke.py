@@ -27,6 +27,16 @@ from ai_core import (
     _build_outreach,
     ScoreResult,
 )  # noqa: E402
+from ai_messages import (
+    get_message_for,
+    _pick_angle_for,
+    _fill,
+    _templated_messages,
+    enrich_leads_with_messages,
+    ANGLE_TEMPLATES,
+    LeadMessages,
+    MessageEngine,
+)  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -311,6 +321,148 @@ def test_ai_core_enrich_batch_updates_businesses():
         assert biz.ai_score is not None
         assert biz.ai_outreach  # not empty
         assert biz.ai_category
+
+
+# ---------------------------------------------------------------------------
+# ai_messages - per-lead unique message engine
+# ---------------------------------------------------------------------------
+
+
+def test_pick_angle_deterministic_per_business():
+    """Same business always picks the same angle."""
+    biz = Business(name="Joe's Cafe", address="5 Park Ave, NYC",
+                   phone_number="+1 212-555-0100")
+    a1 = _pick_angle_for(biz)
+    a2 = _pick_angle_for(biz)
+    assert a1["id"] == a2["id"]
+
+
+def test_pick_angle_differs_between_businesses():
+    """Different businesses usually get different angles."""
+    angles_seen = set()
+    for name in ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"]:
+        biz = Business(name=f"{name}'s Biz", address=f"{name} Street, Mumbai",
+                       phone_number=f"+91 12345 6{name}890")
+        a = _pick_angle_for(biz)
+        angles_seen.add(a["id"])
+    # Should pick at least 4 different angles for 10 businesses
+    assert len(angles_seen) >= 4
+
+
+def test_12_angle_templates_exist():
+    """We have at least 12 message angles to choose from."""
+    assert len(ANGLE_TEMPLATES) >= 12
+    # Each has the required keys
+    for angle in ANGLE_TEMPLATES:
+        assert "id" in angle
+        assert "subject_styles" in angle
+        assert "opener" in angle
+        assert "bridge" in angle
+        assert "offer" in angle
+        assert "close" in angle
+        assert len(angle["subject_styles"]) >= 1
+
+
+def test_fill_replaces_placeholders():
+    """Template fill replaces placeholders safely."""
+    biz = Business(name="Joe's Cafe", address="NYC", category="cafe")
+    out = _fill("Hi {name}, come to {city} for {cat}.", biz, "cafe", "NYC", "")
+    assert "Joe's Cafe" in out
+    assert "NYC" in out
+    assert "cafe" in out
+    assert "{" not in out  # no unfilled
+
+
+def test_templated_messages_populated():
+    """get_message_for returns all message variants."""
+    biz = Business(name="Punjabi Rasoi", address="12 Bandra, Mumbai",
+                   phone_number="+91 22 2640 1234", category="restaurant",
+                   reviews_average=4.3, reviews_count=542)
+    msgs = get_message_for(biz)
+    assert msgs["subject"]
+    assert msgs["subject_b"]
+    assert msgs["body_email"]
+    assert msgs["whatsapp_short"]
+    assert msgs["sms"]
+    assert msgs["call_script"]
+    assert msgs["followup_day3"]
+    assert msgs["followup_day7"]
+    assert msgs["followup_day14"]
+    assert msgs["angle_id"]
+    # Body should be substantial
+    assert len(msgs["body_email"]) > 100
+    # Should mention the lead's data
+    assert "Punjabi Rasoi" in msgs["body_email"]
+    assert "Mumbai" in msgs["body_email"]
+
+
+def test_each_business_gets_different_body():
+    """Two different businesses don't get the same body."""
+    biz1 = Business(name="Punjabi Rasoi", address="12 Bandra, Mumbai",
+                    phone_number="+91 22 2640 1234", category="restaurant",
+                    reviews_average=4.3, reviews_count=542)
+    biz2 = Business(name="Joe's Cafe", address="5 Park Ave, NYC",
+                   phone_number="+1 212-555-0100", category="cafe",
+                   reviews_average=4.7, reviews_count=1280)
+    m1 = get_message_for(biz1)
+    m2 = get_message_for(biz2)
+    # Different businesses get at least one of:
+    # different angle, different subject, or different body
+    assert (m1["angle_id"] != m2["angle_id"]
+            or m1["subject"] != m2["subject"]
+            or m1["body_email"] != m2["body_email"])
+
+
+def test_enrich_leads_with_messages_fills_businesses():
+    """enrich_leads_with_messages adds message fields to each business."""
+    bizs = [
+        Business(name="A", phone_number="+91 12345 67890"),
+        Business(name="B", phone_number="+91 99999 88888"),
+    ]
+    enrich_leads_with_messages(bizs, ai=None)
+    for biz in bizs:
+        assert biz.ai_subject
+        assert biz.ai_body_email
+        assert biz.ai_whatsapp
+        assert biz.ai_sms
+        assert biz.ai_call_script
+        assert biz.ai_followup_day3
+        assert biz.ai_followup_day7
+        assert biz.ai_followup_day14
+        assert biz.ai_angle_id
+        assert biz.ai_messages_source == "template"
+
+
+def test_message_engine_works_without_ai():
+    """MessageEngine without AI falls back to templates."""
+    engine = MessageEngine(ai=None)
+    biz = Business(name="Test Cafe", phone_number="+91 12345 67890")
+    msgs = engine.for_lead(biz)
+    assert isinstance(msgs, LeadMessages)
+    assert msgs.source == "template"
+    assert msgs.body_email
+    assert "Test Cafe" in msgs.body_email
+
+
+def test_followup_messages_are_unique_per_business():
+    """Different businesses get different follow-up messages."""
+    biz1 = Business(name="A's Shop", address="Main St, Delhi",
+                    phone_number="+91 11 1234 5678")
+    biz2 = Business(name="B's Shop", address="Park Ave, Mumbai",
+                    phone_number="+91 22 1234 5678")
+    m1 = get_message_for(biz1)
+    m2 = get_message_for(biz2)
+    # At least the day-7 follow-up should mention the city
+    assert "Delhi" in m1["followup_day7"]
+    assert "Mumbai" in m2["followup_day7"]
+
+
+def test_call_script_has_all_sections():
+    """Voice call script has opening/hook/pitch/offer/close structure."""
+    biz = Business(name="Test Cafe", phone_number="+91 12345 67890", address="Mumbai", category="cafe")
+    msgs = get_message_for(biz)
+    for section in ("[OPENING]", "[HOOK]", "[PITCH]", "[OFFER]", "[CLOSE]"):
+        assert section in msgs["call_script"], f"Missing {section}"
 
 
 # ---------------------------------------------------------------------------

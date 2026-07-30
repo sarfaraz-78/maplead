@@ -49,8 +49,22 @@ class Business:
     ai_score: Optional[int] = None       # 0-10 lead quality
     ai_tier: Optional[str] = None        # hot / warm / cold / skip
     ai_reason: Optional[str] = None      # short why-scored-this-way
-    ai_outreach: Optional[str] = None    # personalized 50-word message
+    ai_outreach: Optional[str] = None    # legacy single-line outreach (deprecated)
     ai_category: Optional[str] = None    # short business-type tag
+
+    # Multi-channel unique messages (populated by ai_messages.enrich_leads_with_messages)
+    ai_subject: Optional[str] = None          # primary subject line
+    ai_subject_b: Optional[str] = None        # alternate subject A/B test
+    ai_subject_c: Optional[str] = None
+    ai_body_email: Optional[str] = None       # main email body
+    ai_whatsapp: Optional[str] = None         # short WhatsApp version
+    ai_sms: Optional[str] = None              # ultra-short SMS version
+    ai_call_script: Optional[str] = None      # voice outreach script
+    ai_followup_day3: Optional[str] = None    # 3-day follow-up
+    ai_followup_day7: Optional[str] = None    # 7-day follow-up
+    ai_followup_day14: Optional[str] = None   # 14-day final follow-up
+    ai_angle_id: Optional[str] = None         # which angle generated this
+    ai_messages_source: Optional[str] = None  # "ai" or "template"
 
     def to_dict(self) -> dict:
         return asdict(self)
