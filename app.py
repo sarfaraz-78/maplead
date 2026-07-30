@@ -1209,6 +1209,7 @@ elif page == PAGE_CRM:
     # =========================================================================
     # CRM — pipeline + tasks + activity
     # =========================================================================
+    from database import STATUSES
     import crm as crm_mod
 
     st.markdown("## 📇 CRM — Leads, Pipeline, Activity")
