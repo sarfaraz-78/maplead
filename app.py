@@ -146,12 +146,13 @@ st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 # Page navigation (sidebar radio)
 # ---------------------------------------------------------------------------
 PAGE_SCRAPE = "🔍 Scrape"
+PAGE_CRM = "📇 CRM"
 PAGE_DB = "🗄️ Database"
 PAGE_STATS = "📊 Stats"
 PAGE_SETTINGS = "⚙️ Settings"
 page = st.sidebar.radio(
     "Navigation",
-    [PAGE_SCRAPE, PAGE_DB, PAGE_STATS, PAGE_SETTINGS],
+    [PAGE_SCRAPE, PAGE_CRM, PAGE_DB, PAGE_STATS, PAGE_SETTINGS],
     index=0,
     label_visibility="collapsed",
     key="nav_page",
@@ -1204,11 +1205,159 @@ if page == PAGE_SCRAPE:
     
 # Database page — view, search, edit, bulk-update stored leads
 # ---------------------------------------------------------------------------
-elif page == PAGE_DB:
-    from database import STATUSES
-    from features import whatsapp_url, format_phone_in
+elif page == PAGE_CRM:
+    # =========================================================================
+    # CRM — pipeline + tasks + activity
+    # =========================================================================
+    import crm as crm_mod
 
-    st.markdown("## 🗄️ Lead Database")
+    st.markdown("## 📇 CRM — Leads, Pipeline, Activity")
+    st.caption(
+        "Every scrape auto-saves here. Move leads through the pipeline, "
+        "log calls/emails, and track what's working."
+    )
+
+    db = get_db()
+    sources = db.list_sources()
+
+    if not sources:
+        st.info(
+            "📭 **No leads yet.** Scrape something from 🔍 Scrape, "
+            "and they'll show up here."
+        )
+        st.stop()
+
+    # ---- Top KPI strip -----------------------------------------------------
+    pipeline = crm_mod.get_pipeline_summary(db)
+    total = sum(p["count"] for p in pipeline)
+    hot_count = sum(1 for biz in crm_mod.get_hot_leads(db, min_score=8))
+
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("📦 Total leads", f"{total:,}")
+    k2.metric("🔥 Hot (score ≥8)", hot_count)
+    k3.metric("📞 To contact (New)", pipeline[0]["count"])
+    k4.metric("✅ Won", pipeline[4]["count"])
+
+    st.divider()
+
+    # ---- Pipeline kanban --------------------------------------------------
+    st.markdown("### 🔀 Pipeline")
+    cols = st.columns(len(STATUSES))
+    status_emojis = {
+        "New": "🆕", "Contacted": "📞", "Interested": "⭐",
+        "Quoted": "💰", "Won": "🏆", "Lost": "❌"
+    }
+    for col, row in zip(cols, pipeline):
+        with col:
+            emoji = status_emojis.get(row["status"], "·")
+            st.markdown(
+                f"<div style='background:{row['color']}20; border-left:4px solid {row['color']}; "
+                f"padding:0.6rem; border-radius:6px; text-align:center;'>"
+                f"<div style='font-size:1.6rem; font-weight:700;'>{row['count']}</div>"
+                f"<div style='font-size:0.8rem;'>{emoji} {row['status']}</div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
+    st.divider()
+
+    # ---- Today's tasks (New leads ready for outreach) ---------------------
+    st.markdown("### 📞 Ready for Outreach")
+    tasks = crm_mod.get_today_tasks(db)
+    if not tasks:
+        st.caption("Nothing to do — all hot leads are already contacted. 👏")
+    else:
+        st.caption(f"{len(tasks)} new leads with phone/website — click to log activity")
+        for task in tasks[:15]:
+            tc1, tc2, tc3, tc4, tc5 = st.columns([3, 2, 2, 1, 1])
+            with tc1:
+                st.markdown(f"**{task['name']}**")
+                st.caption(f"{task['category'] or '—'} · {task['source']}")
+            with tc2:
+                st.code(task['phone'] or "(no phone)", language=None)
+            with tc3:
+                if task['phone']:
+                    digits = ''.join(c for c in task['phone'] if c.isdigit() or c == '+')
+                    wa_link = f"https://wa.me/{digits.replace('+','')}"
+                    st.markdown(f"[💬 WhatsApp]({wa_link})  •  [📞 Call](tel:{digits})")
+            with tc4:
+                if st.button("✅ Log contact", key=f"logged_{task['id']}", use_container_width=True):
+                    crm_mod.quick_log_contact(db, task['id'], task['source'], "call")
+                    st.rerun()
+            with tc5:
+                if st.button("🚫 Skip", key=f"skip_{task['id']}", use_container_width=True):
+                    db.set_status(task['id'], "Lost", task['source'], note="Skipped from outreach list")
+                    st.rerun()
+
+    st.divider()
+
+    # ---- Hot leads (AI-scored, untouched) ----------------------------------
+    st.markdown("### 🔥 Hot Leads (AI Score ≥ 8, Not Contacted)")
+    hot_leads = crm_mod.get_hot_leads(db, min_score=8)
+    if not hot_leads:
+        st.caption("No hot leads yet — scrape more, or wait for leads to accumulate.")
+    else:
+        for lead in hot_leads[:10]:
+            with st.expander(f"{lead.ai_score}/10 — {lead.name or '(no name)'}  •  {lead.category or '—'}"):
+                st.markdown(
+                    f"**Phone:** `{lead.phone or '—'}`\n\n"
+                    f"**Address:** {lead.address or '—'}\n\n"
+                    f"**Website:** {lead.website or '—'}\n\n"
+                    f"**Rating:** {lead.rating} ({lead.reviews_count} reviews)\n\n"
+                    f"**Source:** {lead.source}"
+                )
+                if lead.ai_body_email:
+                    st.markdown("**📧 Outreach (auto-generated):**")
+                    st.text_area(
+                        "body",
+                        value=lead.ai_body_email,
+                        height=200,
+                        key=f"hot_body_{lead.id}",
+                        label_visibility="collapsed",
+                    )
+                if lead.ai_whatsapp:
+                    st.markdown("**💬 WhatsApp:**")
+                    st.code(lead.ai_whatsapp, language=None)
+                ca, cb, cc, cd = st.columns(4)
+                with ca:
+                    if st.button("📞 Log call", key=f"hc_{lead.id}_call", use_container_width=True):
+                        crm_mod.quick_log_contact(db, lead.id, lead.source, "call")
+                        st.toast("Call logged")
+                        st.rerun()
+                with cb:
+                    if st.button("📧 Log email", key=f"hc_{lead.id}_email", use_container_width=True):
+                        crm_mod.quick_log_contact(db, lead.id, lead.source, "email")
+                        db.set_status(lead.id, "Contacted", lead.source)
+                        st.toast("Email sent + marked Contacted")
+                        st.rerun()
+                with cc:
+                    if st.button("📥 Move: Contacted", key=f"hc_{lead.id}_mc", use_container_width=True):
+                        db.set_status(lead.id, "Contacted", lead.source)
+                        st.toast("→ Contacted")
+                        st.rerun()
+                with cd:
+                    if st.button("🏆 Won!", key=f"hc_{lead.id}_won", use_container_width=True):
+                        db.set_status(lead.id, "Won", lead.source)
+                        st.toast("🎉 Marked Won")
+                        st.rerun()
+
+    st.divider()
+
+    # ---- Recent activity --------------------------------------------------
+    st.markdown("### 📜 Recent Activity")
+    activity = crm_mod.get_recent_activity(db, limit=10)
+    if not activity:
+        st.caption("No activity yet — log your first call or email above.")
+    else:
+        kind_emoji = {"call": "📞", "email": "📧", "whatsapp": "💬",
+                       "meeting": "🤝", "note": "📝"}
+        for act in activity:
+            e = kind_emoji.get(act['kind'], "·")
+            st.markdown(
+                f"{e} **{act['lead_name']}** — {act['kind']}"
+                f"  `{act['source']}`  _{act['at']}_"
+                + (f"\n\n   > {act['summary']}" if act['summary'] else "")
+            )
     st.caption(
         "Each scrape creates its own table — leads from different campaigns never mix. "
         "Pick a source below to view, search, and edit."
@@ -1564,6 +1713,85 @@ elif page == PAGE_DB:
                 key="btn_export_stats",
             )
 
+
+# ---------------------------------------------------------------------------
+# Database page (raw table view + bulk ops)
+# ---------------------------------------------------------------------------
+elif page == PAGE_DB:
+    from database import STATUSES
+
+    st.markdown("## 🗄️ Lead Database")
+    st.caption(
+        "Each scrape creates its own table. Leads from different campaigns "
+        "never mix. **Use 📇 CRM for daily work — that page has the same data, "
+        "plus pipeline, tasks, and quick-log buttons.**"
+    )
+
+    db = get_db()
+    sources = db.list_sources()
+
+    if not sources:
+        st.info("📭 No leads yet. Run a scrape from 🔍 Scrape.")
+    else:
+        # Quick stats per source
+        st.markdown("### 📋 Sources")
+        import pandas as pd
+        rows = []
+        for s in sources:
+            rows.append({
+                "Source": s.name,
+                "Leads": s.lead_count,
+                "Backend": s.backend or "—",
+                "Created": s.created_at or "—",
+                "Last scrape": s.last_scraped_at or "—",
+            })
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+        # Per-source details
+        st.markdown("### 📂 View Source Details")
+        src_names = [s.name for s in sources]
+        sel = st.selectbox("Pick a source", src_names, key="db_detail_sel")
+        if sel:
+            leads = db.query(source=sel, limit=500)
+            st.caption(f"{len(leads)} leads in '{sel}'")
+            if leads:
+                import pandas as pd
+                df = pd.DataFrame([{
+                    "Name": l.name,
+                    "Status": l.status,
+                    "Phone": l.phone,
+                    "Rating": l.rating,
+                    "Reviews": l.reviews_count,
+                    "Category": l.category,
+                } for l in leads])
+                st.dataframe(df, use_container_width=True, hide_index=True)
+
+                # Bulk actions
+                st.markdown("### ⚡ Bulk Actions")
+                ba1, ba2, ba3 = st.columns(3)
+                with ba1:
+                    new_st = st.selectbox("Move all New →", STATUSES, key="bulk_st")
+                    if st.button("Apply to all 'New' in this source", key="bulk_apply"):
+                        ids = [l.id for l in leads if l.status == "New"]
+                        if ids:
+                            db.bulk_set_status(ids, sel, new_st)
+                            st.toast(f"Updated {len(ids)} leads → {new_st}")
+                            st.rerun()
+                with ba2:
+                    if st.button("Export this source (CSV)", key="bulk_export"):
+                        from crm import export_leads_csv
+                        st.download_button(
+                            "💾 Download CSV",
+                            data=export_leads_csv(leads),
+                            file_name=f"maplead_{sel.replace(' ', '_')}.csv",
+                            mime="text/csv",
+                        )
+                with ba3:
+                    confirm = st.checkbox("Confirm: drop this source")
+                    if st.button("🗑 Drop source", type="secondary", disabled=not confirm):
+                        n = db.drop_source(sel)
+                        st.toast(f"Dropped {sel} ({n} leads)")
+                        st.rerun()
 
 # ---------------------------------------------------------------------------
 # Stats page
