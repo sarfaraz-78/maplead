@@ -18,6 +18,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scraper import Business, BusinessList, parse_rating, parse_review_count  # noqa: E402
 from utils import _rows, compute_stats, export_csv, export_json  # noqa: E402
 from scorer import heuristic_score, score_batch, TIER_EMOJI  # noqa: E402
+from ai_core import (
+    AICore,
+    detect_provider,
+    mask_key,
+    _guess_category,
+    _extract_city,
+    _build_outreach,
+    ScoreResult,
+)  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -158,6 +167,150 @@ def test_heuristic_category_from_name():
                               "gym", "education", "restaurant", "retail",
                               "auto", "legal", "finance", "pharmacy",
                               "hotel", "other")
+
+
+# ---------------------------------------------------------------------------
+# ai_core - new from-scratch AI module
+# ---------------------------------------------------------------------------
+
+
+def test_detect_provider_known_prefixes():
+    """Auto-detect provider from API key prefix."""
+    assert detect_provider("sk-or-v1-abc")["name"] == "OpenRouter"
+    assert detect_provider("sk-or-legacy")["name"] == "OpenRouter"
+    assert detect_provider("sk-ant-api03-x")["name"] == "Anthropic"
+    assert detect_provider("sk-proj-abc")["name"] == "OpenAI"
+    assert detect_provider("gsk_abc")["name"] == "Groq"
+    assert detect_provider("fw_abc")["name"] == "Fireworks"
+    assert detect_provider("") is None
+    assert detect_provider(None) is None
+
+
+def test_detect_provider_unknown_prefix_returns_none():
+    """detect_provider is pure - returns None for unknown prefixes.
+
+    The "fallback to OpenRouter" happens in AICore constructor, not here.
+    """
+    assert detect_provider("sk-X5kWwAR3NH5RuKzH8V0AHhcHm0lwqDThCB7F2ZoIXPB4fUBpY8DTdpeasCnOcuRy") is None
+    assert detect_provider("totally_random_key_xyz") is None
+
+
+def test_mask_key_safe():
+    """Never expose full key."""
+    assert "..." in mask_key("sk-or-v1-1234567890abcdef")
+    assert mask_key("").startswith("(")
+    assert len(mask_key("short")) < 8
+
+
+def test_extract_city_from_address():
+    """Pull city from comma-separated address."""
+    # 3-part [street, area, city] -> city is last
+    assert _extract_city("12 Linking Road, Bandra West, Mumbai 400050") == "Mumbai 400050"
+    # 4-part [street, area, city, state] -> city is second-to-last
+    assert _extract_city("A, B, C, D") == "C"
+    # 5-part [street, area, city, state, country] -> city is third-to-last
+    assert _extract_city("A, B, C, D, E") == "C"
+    # 2 parts: pick the LAST one (city)
+    assert _extract_city("Bandra West, Mumbai") == "Mumbai"
+    # Edge cases
+    assert _extract_city("") == "your area"
+    assert _extract_city(None) == "your area"
+    assert _extract_city("Just City") == "Just City"
+
+
+def test_guess_category_basic():
+    """Category from name or explicit category field."""
+    assert _guess_category("Joe's Cafe", None) == "cafe"
+    assert _guess_category("Best Salon", None) == "salon"
+    assert _guess_category(None, "Medical Center") == "medical_center"
+    assert _guess_category("Random Name", None) == "other"
+
+
+def test_build_outreach_includes_name_and_offer():
+    """Outreach includes the business name and a concrete offer."""
+    biz = Business(name="Punjabi Rasoi", address="12 Linking Road, Bandra West, Mumbai 400050")
+    msg = _build_outreach(biz, "warm")
+    assert "Punjabi Rasoi" in msg
+    assert len(msg) > 50
+    assert any(kw in msg.lower() for kw in ("call", "week", "improve", "automation"))
+
+
+def test_ai_core_no_key_is_heuristic_only():
+    """AICore with no key: is_configured=False, is_working=False."""
+    # Save and clear env vars so they don't pollute the test
+    import os
+    saved_openai = os.environ.pop("MAPLEAD_OPENAI_API_KEY", "")
+    saved_or = os.environ.pop("OPENROUTER_API_KEY", "")
+    try:
+        ai = AICore(api_key="")
+        assert ai.is_configured() is False
+        assert ai.is_working() is False
+    finally:
+        if saved_openai: os.environ["MAPLEAD_OPENAI_API_KEY"] = saved_openai
+        if saved_or: os.environ["OPENROUTER_API_KEY"] = saved_or
+
+
+def test_ai_core_describe_no_key():
+    import os
+    saved_openai = os.environ.pop("MAPLEAD_OPENAI_API_KEY", "")
+    saved_or = os.environ.pop("OPENROUTER_API_KEY", "")
+    try:
+        ai = AICore(api_key="")
+        desc = ai.describe()
+        assert desc["configured"] is False
+        assert desc["working"] is False
+        assert desc["provider"] == "none"
+    finally:
+        if saved_openai: os.environ["MAPLEAD_OPENAI_API_KEY"] = saved_openai
+        if saved_or: os.environ["OPENROUTER_API_KEY"] = saved_or
+
+
+def test_ai_core_score_business_uses_heuristic_when_not_working():
+    """Even without a working key, score_business returns a valid ScoreResult."""
+    ai = AICore(api_key=None)
+    biz = Business(
+        name="Test Cafe",
+        phone_number="+91 12345 67890",
+        website="https://x.com",
+        reviews_average=4.5,
+        reviews_count=200,
+    )
+    res = ai.score_business(biz)
+    assert isinstance(res, ScoreResult)
+    assert res.score >= 5
+    assert res.tier in ("hot", "warm")
+    assert res.source == "heuristic"
+    assert res.outreach  # populated
+
+
+def test_ai_core_outreach_fallback():
+    """outreach_for_business returns a non-empty message even without AI."""
+    ai = AICore(api_key=None)
+    biz = Business(name="Test", phone_number="+91 12345 67890")
+    msg = ai.outreach_for_business(biz)
+    assert msg
+    assert "Test" in msg
+
+
+def test_ai_core_categorize_fallback():
+    """categorize_business returns a tag from name or category."""
+    ai = AICore(api_key=None)
+    biz = Business(name="Best Salon", phone_number="+91 12345 67890")
+    assert ai.categorize_business(biz) == "salon"
+
+
+def test_ai_core_enrich_batch_updates_businesses():
+    """enrich() batch fills in AI fields for each business."""
+    ai = AICore(api_key=None)
+    bizs = [
+        Business(name="A", phone_number="+91 12345 67890"),
+        Business(name="B", phone_number="+91 99999 88888"),
+    ]
+    ai.enrich(bizs, ops=["score", "outreach", "category"])
+    for biz in bizs:
+        assert biz.ai_score is not None
+        assert biz.ai_outreach  # not empty
+        assert biz.ai_category
 
 
 # ---------------------------------------------------------------------------

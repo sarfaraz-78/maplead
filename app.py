@@ -29,17 +29,27 @@ except ImportError:
     ScraperBackend = None  # type: ignore[assignment, misc]
 
 try:
-    from ai_enrichment import AIEnricher, AVAILABLE_MODELS, DEFAULT_MODEL as OR_DEFAULT_MODEL
+    from ai_core import (
+        AICore,
+        heuristic_score,
+        heuristic_outreach,
+        score_batch,
+        TIER_EMOJI,
+        TIER_COLORS,
+        mask_key,
+        detect_provider,
+    )
+    AI_OK = True
 except ImportError:
-    AIEnricher = None  # type: ignore[assignment,misc]
-    AVAILABLE_MODELS = {}  # type: ignore[assignment]
-    OR_DEFAULT_MODEL = ""
-
-try:
-    from scorer import heuristic_score, score_batch, TIER_EMOJI, TIER_COLORS
-    SCORER_OK = True
-except ImportError:
-    SCORER_OK = False
+    AI_OK = False
+    AICore = None  # type: ignore[assignment,misc]  # type: ignore
+    heuristic_score = None  # type: ignore[assignment,misc]
+    heuristic_outreach = None  # type: ignore[assignment,misc]
+    score_batch = None  # type: ignore[assignment,misc]
+    TIER_EMOJI = {}  # type: ignore[assignment]
+    TIER_COLORS = {}  # type: ignore[assignment]
+    mask_key = None  # type: ignore[assignment,misc]
+    detect_provider = None  # type: ignore[assignment,misc]  # type: ignore
 
 # ---------------------------------------------------------------------------
 # Default values for variables used by the runner function below.
@@ -613,62 +623,57 @@ if page == PAGE_SCRAPE:
                         progress_callback=update,
                     )
 
-                    # AI enrichment step (optional, runs after scrape).
-                    # Always fall back to heuristic scorer if AI fails / no key.
-                    if result and result.business_list:
-                        from scorer import heuristic_score
-                        ai_works = False
-                        ai_err = None
-                        if (
-                            _ai_enabled
-                            and AIEnricher is not None
-                            and _ai_key
-                            and _ai_ops
-                        ):
-                            try:
-                                enricher = AIEnricher(api_key=_ai_key, model=_ai_model)
-                                # First, ping with a tiny call to confirm the key actually works
-                                _ping = await enricher._call_llm(
-                                    "You are a test.",
-                                    "Reply with the word OK only.",
-                                    temperature=0,
-                                    max_tokens=5,
-                                )
-                                if _ping and "OK" in _ping.upper()[:20]:
-                                    ai_works = True
-                                    total_biz = len(result.business_list)
-                                    for i in range(total_biz):
-                                        await update(total_biz + i + 1, total_biz * 2)
-                                    await enricher.enrich_batch(result.business_list, _ai_ops)
-                                    await update(total_biz * 2, total_biz * 2)
-                                else:
-                                    ai_err = "AI ping returned empty/invalid response"
-                            except Exception as ai_exc:
-                                ai_err = f"{type(ai_exc).__name__}: {ai_exc}"
-                                logger.warning("AI enrichment failed: %s", ai_exc)
+                    # AI enrichment step (runs after scrape).
+                    # ai_core.AICore handles BOTH AI and heuristic paths
+                    # - no silent failures, no missing fields.
+                    if result and result.business_list and AICore is not None:
+                        ai_instance = AICore(
+                            api_key=_ai_key or None,
+                            model=_ai_model or None,
+                        )
+                        test_status = ai_instance.test()
+                        ai_works = test_status["ok"]
+                        ai_err = test_status.get("error")
 
-                        # ALWAYS apply heuristic scoring + templated outreach + category
-                        # (works without any AI). AI augments these when available.
+                        # Run enrichment (AI if working, else heuristic-only)
+                        if _ai_enabled and ai_works and _ai_ops:
+                            try:
+                                # Run sequentially with progress updates
+                                total_biz = len(result.business_list)
+                                for i, biz in enumerate(result.business_list):
+                                    if "score" in _ai_ops:
+                                        ai_instance.score_business(biz)
+                                    if "outreach" in _ai_ops:
+                                        ai_instance.outreach_for_business(biz)
+                                    if "category" in _ai_ops:
+                                        ai_instance.categorize_business(biz)
+                                    await update(total_biz + i + 1, total_biz * 2)
+                            except Exception as exc:
+                                ai_err = f"{type(exc).__name__}: {exc}"
+                                logger.warning("AI batch enrich failed: %s", exc)
+
+                        # ALWAYS fill any gaps with heuristic (no field ever stays blank)
                         for biz in result.business_list:
                             hs = heuristic_score(biz)
                             if biz.ai_score is None:
                                 biz.ai_score = hs.score
                                 biz.ai_tier = hs.tier
                                 biz.ai_reason = hs.reason + ("  (heuristic)" if not ai_works else "")
-                            # Always ensure outreach + category are populated
                             if not biz.ai_outreach:
                                 biz.ai_outreach = hs.outreach
                             if not biz.ai_category:
                                 biz.ai_category = hs.category
 
-                        # Save status for UI to display
+                        # Save status for UI
                         st.session_state["LAST_AI_STATUS"] = {
                             "configured": _ai_enabled and bool(_ai_key),
                             "attempted": _ai_enabled and bool(_ai_key) and bool(_ai_ops),
                             "succeeded": ai_works,
                             "error": ai_err,
                             "n_businesses": len(result.business_list),
-                            "model": _ai_model if ai_works else "",
+                            "model": test_status.get("model", ""),
+                            "provider": test_status.get("provider", ""),
+                            "key": test_status.get("key", ""),
                             "fallback_used": not ai_works and (_ai_enabled and bool(_ai_key)),
                         }
 
@@ -882,19 +887,25 @@ if page == PAGE_SCRAPE:
         if _ai_status:
             if _ai_status.get("succeeded"):
                 st.success(
-                    f"✅ AI enrichment active — {_ai_status.get('model','?')} scored "
-                    f"{_ai_status.get('n_businesses', 0)} leads"
+                    f"✅ AI active — **{_ai_status.get('provider','')}** "
+                    f"({_ai_status.get('model','?')}) "
+                    f"scored {_ai_status.get('n_businesses', 0)} leads"
                 )
             elif _ai_status.get("attempted") and _ai_status.get("error"):
                 st.warning(
-                    f"⚠️ AI call failed ({_ai_status['error'][:80]}) — "
-                    f"showing heuristic scores instead. Get a working key at "
-                    f"https://openrouter.ai/keys or test in ⚙ Settings."
+                    f"⚠️ AI call failed: **{_ai_status['error'][:150]}** — "
+                    f"showing heuristic scores instead. "
+                    f"Get a working key at https://openrouter.ai/keys"
                 )
-            elif not _ai_status.get("configured"):
+            elif _ai_status.get("configured") and not _ai_status.get("attempted"):
                 st.info(
-                    "🧮 Showing heuristic scores (no AI). Add an OpenRouter key in 🤖 AI enrichment "
-                    "to enable AI scoring + outreach messages."
+                    "🧮 AI enabled but no operations selected (default: score only). "
+                    "Showing heuristic scores."
+                )
+            else:
+                st.info(
+                    "🧮 No AI key set. Showing heuristic scores (always works). "
+                    "Add a key in 🤖 AI enrichment to enable AI scoring + outreach."
                 )
 
         # Charts
