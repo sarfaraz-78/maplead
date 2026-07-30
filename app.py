@@ -1299,7 +1299,7 @@ elif page == PAGE_CRM:
         st.caption("No hot leads yet — scrape more, or wait for leads to accumulate.")
     else:
         for lead in hot_leads[:10]:
-            with st.expander(f"{lead.ai_score}/10 — {lead.name or '(no name)'}  •  {lead.category or '—'}"):
+            with st.expander(f"{getattr(lead, 'ai_score', None) or '?'}/10 — {lead.name or '(no name)'}  •  {lead.category or '—'}"):
                 st.markdown(
                     f"**Phone:** `{lead.phone or '—'}`\n\n"
                     f"**Address:** {lead.address or '—'}\n\n"
@@ -1307,7 +1307,7 @@ elif page == PAGE_CRM:
                     f"**Rating:** {lead.rating} ({lead.reviews_count} reviews)\n\n"
                     f"**Source:** {lead.source}"
                 )
-                if lead.ai_body_email:
+                if getattr(lead, "ai_body_email", None):
                     st.markdown("**📧 Outreach (auto-generated):**")
                     st.text_area(
                         "body",
@@ -1316,7 +1316,7 @@ elif page == PAGE_CRM:
                         key=f"hot_body_{lead.id}",
                         label_visibility="collapsed",
                     )
-                if lead.ai_whatsapp:
+                if getattr(lead, "ai_whatsapp", None):
                     st.markdown("**💬 WhatsApp:**")
                     st.code(lead.ai_whatsapp, language=None)
                 ca, cb, cc, cd = st.columns(4)

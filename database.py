@@ -105,6 +105,19 @@ class Lead:
     ai_score_reason: Optional[str] = None
     ai_research: Optional[str] = None
     ai_qualified: Optional[str] = None
+    # Multi-channel outreach messages (added so CRM hot-leads can preview them)
+    ai_subject: Optional[str] = None
+    ai_subject_b: Optional[str] = None
+    ai_subject_c: Optional[str] = None
+    ai_body_email: Optional[str] = None
+    ai_whatsapp: Optional[str] = None
+    ai_sms: Optional[str] = None
+    ai_call_script: Optional[str] = None
+    ai_followup_day3: Optional[str] = None
+    ai_followup_day7: Optional[str] = None
+    ai_followup_day14: Optional[str] = None
+    ai_angle_id: Optional[str] = None
+    ai_messages_source: Optional[str] = None
     first_seen: str = ""
     last_seen: str = ""
     times_seen: int = 1
@@ -134,6 +147,19 @@ def _row_to_lead(row: sqlite3.Row, source: str) -> Lead:
         "ai_score_reason": row["ai_score_reason"] if "ai_score_reason" in keys else None,
         "ai_research": row["ai_research"] if "ai_research" in keys else None,
         "ai_qualified": row["ai_qualified"] if "ai_qualified" in keys else None,
+        # Per-lead multi-channel messages (added later; safe if missing)
+        "ai_subject": row["ai_subject"] if "ai_subject" in keys else None,
+        "ai_subject_b": row["ai_subject_b"] if "ai_subject_b" in keys else None,
+        "ai_subject_c": row["ai_subject_c"] if "ai_subject_c" in keys else None,
+        "ai_body_email": row["ai_body_email"] if "ai_body_email" in keys else None,
+        "ai_whatsapp": row["ai_whatsapp"] if "ai_whatsapp" in keys else None,
+        "ai_sms": row["ai_sms"] if "ai_sms" in keys else None,
+        "ai_call_script": row["ai_call_script"] if "ai_call_script" in keys else None,
+        "ai_followup_day3": row["ai_followup_day3"] if "ai_followup_day3" in keys else None,
+        "ai_followup_day7": row["ai_followup_day7"] if "ai_followup_day7" in keys else None,
+        "ai_followup_day14": row["ai_followup_day14"] if "ai_followup_day14" in keys else None,
+        "ai_angle_id": row["ai_angle_id"] if "ai_angle_id" in keys else None,
+        "ai_messages_source": row["ai_messages_source"] if "ai_messages_source" in keys else None,
         "first_seen": row["first_seen"] if "first_seen" in keys else "",
         "last_seen": row["last_seen"] if "last_seen" in keys else "",
         "times_seen": row["times_seen"] if "times_seen" in keys else 1,
@@ -175,6 +201,18 @@ def _create_leads_table_sql(table: str) -> str:
             ai_research     TEXT,
             ai_qualified    TEXT,
             ai_qualified_at TEXT,
+            ai_subject       TEXT,
+            ai_subject_b     TEXT,
+            ai_subject_c     TEXT,
+            ai_body_email    TEXT,
+            ai_whatsapp      TEXT,
+            ai_sms           TEXT,
+            ai_call_script   TEXT,
+            ai_followup_day3 TEXT,
+            ai_followup_day7 TEXT,
+            ai_followup_day14 TEXT,
+            ai_angle_id      TEXT,
+            ai_messages_source TEXT,
             deleted_at      TEXT,
             first_seen      TEXT NOT NULL,
             last_seen       TEXT NOT NULL,
@@ -234,6 +272,17 @@ class LeadDB:
                 )
                 """
             )
+
+            # Migrate ALL existing leads_<slug> tables so CRM can show
+            # multi-channel messages on leads from past scrapes too.
+            tables = [
+                r["table_name"]
+                for r in c.execute(
+                    "SELECT table_name FROM sources WHERE table_name LIKE 'leads_%'"
+                ).fetchall()
+            ]
+            for t in tables:
+                self._migrate_leads_columns(c, t)
             c.execute(
                 "CREATE INDEX IF NOT EXISTS idx_sources_name ON sources(name)"
             )
@@ -262,6 +311,39 @@ class LeadDB:
             # Create the leads + contacts tables for this source
             c.execute(_create_leads_table_sql(table))
             c.execute(_create_contacts_table_sql(_contacts_table_for_source(source)))
+            # Auto-migrate existing tables: add any missing columns (newer fields)
+            self._migrate_leads_columns(c, table)
+        return table
+
+
+    def _migrate_leads_columns(self, c, table: str) -> None:
+        """Add any missing columns to an existing leads_<slug> table.
+
+        Safe to call repeatedly. SQLite's ALTER TABLE ADD COLUMN is idempotent
+        in our usage because we check for existence first.
+        """
+        # Columns added in v2 (multi-channel AI messages)
+        new_columns = [
+            ("ai_subject", "TEXT"),
+            ("ai_subject_b", "TEXT"),
+            ("ai_subject_c", "TEXT"),
+            ("ai_body_email", "TEXT"),
+            ("ai_whatsapp", "TEXT"),
+            ("ai_sms", "TEXT"),
+            ("ai_call_script", "TEXT"),
+            ("ai_followup_day3", "TEXT"),
+            ("ai_followup_day7", "TEXT"),
+            ("ai_followup_day14", "TEXT"),
+            ("ai_angle_id", "TEXT"),
+            ("ai_messages_source", "TEXT"),
+        ]
+        existing_cols = {row["name"] for row in c.execute(f"PRAGMA table_info({table})").fetchall()}
+        for col_name, col_type in new_columns:
+            if col_name not in existing_cols:
+                try:
+                    c.execute(f"ALTER TABLE {table} ADD COLUMN {col_name} {col_type}")
+                except sqlite3.OperationalError:
+                    pass  # column might already exist (race)
         return table
 
     def list_sources(self) -> list[SourceInfo]:
