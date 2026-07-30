@@ -27,6 +27,12 @@ Three layers:
 Result: each lead gets a unique message that mentions their actual data
 (name, city, rating, reviews, category). Vastly outperforms generic
 mass-mail blasts.
+
+Customization (UserConfig)
+--------------------------
+Callers can pass a UserConfig to tweak tone, channel focus, sender name,
+industry context, etc. Without one, defaults produce a neutral,
+professional voice.
 """
 
 from __future__ import annotations
@@ -50,6 +56,67 @@ from ai_core import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# User-customizable config
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class UserConfig:
+    """Per-scrape customization for message generation.
+
+    All fields are optional. Defaults produce a neutral professional voice.
+    """
+
+    # Sender info (used in closings and signatures)
+    sender_name: str = ""                    # "Vikram" — appears in signatures
+    sender_company: str = ""                # "MapLead Networks" — appears in offers
+    sender_role: str = ""                    # "growth consultant" — for intros
+
+    # Industry / product context
+    industry_context: str = ""              # "I help local businesses with WhatsApp automation"
+    product_offer: str = ""                  # the specific thing being sold (overrides default offer)
+
+    # Tone selector
+    tone: str = "friendly"                   # friendly | formal | direct | storytelling | curious
+    language_hint: str = ""                  # hint for LLM (e.g., "Indian English, slightly formal")
+
+    # Channel focus — which variant to optimize primarily
+    primary_channel: str = "email"           # email | whatsapp | call
+
+    # Custom offer / hook — overrides the per-angle default offer if set
+    custom_offer: str = ""
+    custom_cta: str = ""                     # override for closing question
+
+    # Should the AI angle be the offer-heavy or hook-heavy variant of the angle
+    intensity: str = "balanced"              # balanced | hook_heavy | offer_heavy
+
+    def to_prompt_block(self) -> str:
+        """Render as a prompt fragment for the LLM (AI enhancement)."""
+        lines = []
+        if self.sender_name:
+            lines.append(f"Sender: {self.sender_name}")
+        if self.sender_role:
+            lines.append(f"Sender's role: {self.sender_role}")
+        if self.sender_company:
+            lines.append(f"Sender's company: {self.sender_company}")
+        if self.industry_context:
+            lines.append(f"Sender's business: {self.industry_context}")
+        if self.product_offer:
+            lines.append(f"Product/offer to mention: {self.product_offer}")
+        if self.custom_offer:
+            lines.append(f"Custom offer (use this verbatim): {self.custom_offer}")
+        if self.custom_cta:
+            lines.append(f"Custom CTA (use this verbatim): {self.custom_cta}")
+        if self.tone:
+            lines.append(f"Tone: {self.tone}")
+        if self.language_hint:
+            lines.append(f"Language: {self.language_hint}")
+        if self.intensity:
+            lines.append(f"Intensity: {self.intensity}")
+        return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -293,9 +360,37 @@ def _stable_hash(parts: list[str]) -> int:
     return int(h[:8], 16)
 
 
-def _pick_angle_for(biz: Business) -> dict[str, Any]:
-    """Pick a message angle for this lead (deterministic per business)."""
+def _pick_angle_for(
+    biz: Business, cfg: UserConfig | None = None
+) -> dict[str, Any]:
+    """Pick a message angle for this lead (deterministic per business).
+
+    With cfg.tone set, biases the angle choice to match the tone:
+    - formal -> authority, local_expert
+    - friendly -> reputation, compliment_close
+    - direct -> direct_value, time_sensitive, missed_call
+    - storytelling -> curiosity, mutual_benefit
+    - curious -> growth, pain_point
+    """
     h = _stable_hash([biz.name or "", biz.address or "", biz.phone_number or ""])
+
+    # Bias by tone: shuffle angle preferences
+    tone = (cfg.tone if cfg else "friendly") or "friendly"
+    tone_angles = {
+        "formal":       ["authority", "local_expert", "pain_point", "growth", "time_sensitive", "reputation", "volume", "compliment_close", "direct_value", "curiosity", "mutual_benefit", "missed_call"],
+        "friendly":     ["reputation", "compliment_close", "curiosity", "local_expert", "growth", "volume", "mutual_benefit", "authority", "pain_point", "direct_value", "time_sensitive", "missed_call"],
+        "direct":       ["direct_value", "time_sensitive", "missed_call", "pain_point", "growth", "authority", "mutual_benefit", "local_expert", "reputation", "volume", "curiosity", "compliment_close"],
+        "storytelling": ["curiosity", "mutual_benefit", "volume", "reputation", "compliment_close", "local_expert", "growth", "authority", "pain_point", "direct_value", "time_sensitive", "missed_call"],
+        "curious":      ["growth", "pain_point", "curiosity", "time_sensitive", "mutual_benefit", "authority", "local_expert", "reputation", "volume", "compliment_close", "direct_value", "missed_call"],
+    }
+    ordered = tone_angles.get(tone, [a["id"] for a in ANGLE_TEMPLATES])
+    # Pick the angle whose index in the ordered list matches hash % len
+    by_id = {a["id"]: a for a in ANGLE_TEMPLATES}
+    for i in range(len(ordered)):
+        idx = (h + i * 7) % len(ordered)  # offset by hash spread
+        angle = by_id.get(ordered[idx])
+        if angle:
+            return angle
     return ANGLE_TEMPLATES[h % len(ANGLE_TEMPLATES)]
 
 
@@ -307,8 +402,12 @@ def _local_obs(biz: Business) -> str:
     return ""  # Could pull from reviews_text if available
 
 
-def _fill(template: str, biz: Business, cat: str, city: str, area: str) -> str:
-    """Replace placeholders in a template with safe string fallbacks."""
+def _fill(template: str, biz: Business, cat: str, city: str, area: str, cfg: UserConfig | None = None) -> str:
+    """Replace placeholders in a template with safe string fallbacks.
+
+    Adds `{sender_name}` substitution if a config is provided.
+    """
+    cfg = cfg or UserConfig()
     replacements = {
         "name": biz.name or "your team",
         "city": city,
@@ -318,6 +417,8 @@ def _fill(template: str, biz: Business, cat: str, city: str, area: str) -> str:
         "reviews": str(biz.reviews_count) if biz.reviews_count else "your",
         "phone": biz.phone_number or "your number",
         "website": biz.website or "your site",
+        "sender_name": cfg.sender_name or "",
+        "sender_company": cfg.sender_company or "",
     }
     out = template
     for k, v in replacements.items():
@@ -388,66 +489,113 @@ def _local_area(biz: Business, city: str) -> str:
     return ""
 
 
-def _templated_messages(biz: Business) -> LeadMessages:
-    """Generate all message variants from templates (no LLM needed)."""
+def _templated_messages(
+    biz: Business, cfg: UserConfig | None = None
+) -> LeadMessages:
+    """Generate all message variants from templates (no LLM needed).
+
+    Honors cfg for tone overrides, custom offer/CTA, sender name/company.
+    """
+    cfg = cfg or UserConfig()
     cat = _guess_category(biz.name, biz.category)
     cat_nice = cat.replace("_", " ")
     city = _extract_city(biz.address)
     area = _local_area(biz, city)
 
-    angle = _pick_angle_for(biz)
+    # Apply tone modifiers to the angle picker
+    angle = _pick_angle_for(biz, cfg)
     name = biz.name or "your business"
+    sender = cfg.sender_name or "[your name]"
+    company = cfg.sender_company or ""
 
-    # Fill the angle template
-    subject = _fill(angle["subject_styles"][0], biz, cat_nice, city, area)
-    subject_b = _fill(angle["subject_styles"][-1], biz, cat_nice, city, area)
+    # Fill the angle template (with sender substitutions)
+    subject = _fill(angle["subject_styles"][0], biz, cat_nice, city, area, cfg)
+    subject_b = _fill(angle["subject_styles"][-1], biz, cat_nice, city, area, cfg)
     subject_c = (
-        _fill(angle["subject_styles"][0], biz, cat_nice, city, area) + " (2-min read)"
+        _fill(angle["subject_styles"][0], biz, cat_nice, city, area, cfg) + " (2-min read)"
         if len(angle["subject_styles"]) == 1
-        else _fill(angle["subject_styles"][1] + " — 60s read", biz, cat_nice, city, area)
+        else _fill(angle["subject_styles"][1] + " — 60s read", biz, cat_nice, city, area, cfg)
     )
 
-    opener = _fill(angle["opener"], biz, cat_nice, city, area)
-    bridge = _fill(angle["bridge"], biz, cat_nice, city, area)
-    offer = _fill(angle["offer"], biz, cat_nice, city, area)
-    close = _fill(angle["close"], biz, cat_nice, city, area)
+    opener = _fill(angle["opener"], biz, cat_nice, city, area, cfg)
+    bridge = _fill(angle["bridge"], biz, cat_nice, city, area, cfg)
+
+    # Offer: custom overrides default
+    if cfg.custom_offer:
+        offer = cfg.custom_offer
+    elif cfg.product_offer:
+        offer = _fill(cfg.product_offer, biz, cat_nice, city, area, cfg)
+    else:
+        offer = _fill(angle["offer"], biz, cat_nice, city, area, cfg)
+
+    # Close: custom CTA overrides default
+    if cfg.custom_cta:
+        close = cfg.custom_cta
+    else:
+        close = _fill(angle["close"], biz, cat_nice, city, area, cfg)
+
+    # Tone-prefix for opener
+    tone_prefix = {
+        "friendly": "",
+        "formal": "Dear",
+        "direct": "Quick note —",
+        "storytelling": "I'll make this brief,",
+        "curious": "Curious question —",
+    }.get(cfg.tone, "")
+    if tone_prefix and not opener.lower().startswith(tone_prefix.lower().split()[0].lower()):
+        opener = f"{tone_prefix} {opener}"
 
     body = f"{opener}\n\n{bridge}\n\n{offer}\n\n{close}"
 
     # Channel-specific variants
-    whatsapp = f"Hi {name} — came across your {cat_nice} in {city}. Quick idea worth 60 seconds? Happy to share details."
-    sms = f"Hi {name}, a quick thought re your {cat_nice} in {city}. Worth a 2-min call? - sent via MapLead"
+    intro_sentence = (
+        f"{sender} from {company}" if company else sender
+    ) if sender != "[your name]" else f"I'm a local {cat_nice} consultant"
+
+    whatsapp = (
+        f"Hi {name} — {intro_sentence}, came across your {cat_nice} in {city}. "
+        f"Quick idea worth 60 seconds? Happy to share details."
+    )
+    sms = (
+        f"Hi {name}, quick thought re your {cat_nice} in {city}. "
+        f"Worth a 2-min call? - {sender}" if sender != "[your name]" else
+        f"Hi {name}, quick thought re your {cat_nice} in {city}. Worth a 2-min call? - sent via MapLead"
+    )
 
     call_script = (
         f"[OPENING]\n"
-        f"Hi, may I speak with the owner or manager? My name is [your name], I'm a local {cat_nice} consultant.\n\n"
+        f"Hi, may I speak with the owner or manager? My name is {sender}, "
+        f"I'm a local {cat_nice} consultant"
+        + (f" from {company}" if company else "")
+        + ".\n\n"
         f"[HOOK]\n"
-        f"I'm calling {cat_nice} businesses in {city} — found {name} on Google Maps. You have "
-        f"a strong reputation and I had a quick observation.\n\n"
+        f"I'm calling {cat_nice} businesses in {city} — found {name} on Google Maps. "
+        f"You have a strong reputation and I had a quick observation.\n\n"
         f"[PITCH]\n"
         f"{bridge[:280]}\n\n"
         f"[OFFER]\n"
-        f"I help {cat_nice} businesses with three specific things: faster responses, smarter "
-        f"follow-ups, and reviews that pull their weight. Most clients see results in weeks.\n\n"
+        f"{offer[:240]}\n\n"
         f"[CLOSE]\n"
         f"If you have 10 minutes this week, I can show you the specifics — no pitch, just the playbook. "
         f"When works for you?"
     )
 
     # Follow-up sequence (different angles each time)
+    sender_sig = sender if sender != "[your name]" else ""
+    sig_line = f"\n\n— {sender_sig}" if sender_sig else ""
+
     followup_day3 = (
         f"Hi {name} team,\n\n"
         f"Following up on my note from earlier this week — totally understand if it's not a fit, "
         f"but if there's any chance the timing was just off, I'm happy to send a 1-pager "
         f"specific to {cat_nice} in {city}.\n\n"
-        f"Just reply 'send it' and I'll keep it short."
+        f"Just reply 'send it' and I'll keep it short.{sig_line}"
     )
 
     followup_day7 = (
         f"Hi {name},\n\n"
         f"Quick one — I just wrapped a project with another {cat_nice} in {city}, and the result "
-        f"was pretty striking (recover ~10 hrs/week in missed-call automation). "
-        f"Thought it might be relevant for {name}.\n\n"
+        f"was pretty striking. Thought it might be relevant for {name}.\n\n"
         f"Worth a quick look? I'll send a 3-bullet summary if so."
     )
 
@@ -455,9 +603,8 @@ def _templated_messages(biz: Business) -> LeadMessages:
         f"Hi {name},\n\n"
         f"Last note on this — completely understand if {cat_nice} ops in {city} "
         f"isn't a priority right now. If anything changes in the next few months — "
-        f"expansion, staffing changes, slow season end — I'd love to be a quick "
-        f"resource. Wishing the team the best.\n\n"
-        f"[your name]"
+        f"expansion, staffing, slow-season end — I'd love to be a quick "
+        f"resource. Wishing the team the best.{sig_line}"
     )
 
     return LeadMessages(
@@ -489,13 +636,14 @@ class MessageEngine:
     """Generates unique messages per lead. AI when available, templates otherwise."""
 
     ai: Optional[AICore] = None
+    config: UserConfig = field(default_factory=UserConfig)
 
     def for_lead(self, biz: Business, channel: str = "email") -> LeadMessages:
         """Generate full message set for one lead.
 
         channel: "email" | "whatsapp" | "call" (primary channel to enhance)
         """
-        base = _templated_messages(biz)
+        base = _templated_messages(biz, self.config)
 
         if self.ai is None or not self.ai.is_working():
             return base
@@ -602,6 +750,7 @@ def enrich_leads_with_messages(
     businesses: list[Business],
     ai: Optional[AICore] = None,
     channel: str = "email",
+    config: Optional[UserConfig] = None,
 ) -> list[Business]:
     """Add message fields to each Business (mutates in place).
 
@@ -615,7 +764,8 @@ def enrich_leads_with_messages(
         * ai_angle_id
         * ai_messages_source
     """
-    engine = MessageEngine(ai=ai)
+    cfg = config or UserConfig()
+    engine = MessageEngine(ai=ai, config=cfg)
     for biz in businesses:
         msgs = engine.for_lead(biz, channel=channel)
         d = msgs.to_dict()

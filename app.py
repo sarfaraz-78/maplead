@@ -446,6 +446,86 @@ if page == PAGE_SCRAPE:
             require_website = st.checkbox("Must have website")
             require_phone = st.checkbox("Must have phone")
 
+    # ---- Message customization panel (sets MAPLEAD_MSG_CFG in session_state) ----
+    with st.expander("✏️ Customize my messages", expanded=False):
+        from ai_messages import UserConfig
+        _mc_existing = st.session_state.get("MAPLEAD_MSG_CFG", {}) or {}
+        st.caption(
+            "These details appear inside the messages. Leave blank for neutral defaults. "
+            "Persisted across runs in your browser session."
+        )
+        c1, c2 = st.columns(2)
+        with c1:
+            _sender_name = st.text_input(
+                "Your name",
+                value=_mc_existing.get("sender_name", ""),
+                placeholder="e.g. Vikram",
+                help="Appears in message signatures",
+            )
+            _sender_company = st.text_input(
+                "Your company / brand",
+                value=_mc_existing.get("sender_company", ""),
+                placeholder="e.g. QuickReply AI",
+                help="Optional. Mentioned in your intro and offers.",
+            )
+            _sender_role = st.text_input(
+                "Your role",
+                value=_mc_existing.get("sender_role", ""),
+                placeholder="e.g. growth consultant",
+            )
+            _primary_channel = st.selectbox(
+                "Primary outreach channel",
+                options=["email", "whatsapp", "call"],
+                index=["email", "whatsapp", "call"].index(
+                    _mc_existing.get("primary_channel", "email")
+                ),
+                help="Which variant to optimize primarily",
+            )
+            _tone = st.selectbox(
+                "Tone",
+                options=["friendly", "formal", "direct", "storytelling", "curious"],
+                index=["friendly", "formal", "direct", "storytelling", "curious"].index(
+                    _mc_existing.get("tone", "friendly")
+                ),
+                help="Affects angle selection and opener phrasing",
+            )
+        with c2:
+            _industry_context = st.text_area(
+                "What you do (1-2 sentences)",
+                value=_mc_existing.get("industry_context", ""),
+                placeholder="e.g. We help local businesses automate WhatsApp replies.",
+                height=80,
+                help="Used in offer line",
+            )
+            _product_offer = st.text_area(
+                "Specific thing you're offering",
+                value=_mc_existing.get("product_offer", ""),
+                placeholder="e.g. 14-day free trial, no card needed",
+                height=60,
+            )
+            _custom_offer = st.text_area(
+                "Custom offer (overrides default)",
+                value=_mc_existing.get("custom_offer", ""),
+                placeholder="Sentences describing your offer verbatim",
+                height=60,
+            )
+            _custom_cta = st.text_input(
+                "Custom closing question",
+                value=_mc_existing.get("custom_cta", ""),
+                placeholder="e.g. Got Tuesday at 3pm?",
+            )
+        st.session_state["MAPLEAD_MSG_CFG"] = {
+            "sender_name": _sender_name,
+            "sender_company": _sender_company,
+            "sender_role": _sender_role,
+            "primary_channel": _primary_channel,
+            "tone": _tone,
+            "industry_context": _industry_context,
+            "product_offer": _product_offer,
+            "custom_offer": _custom_offer,
+            "custom_cta": _custom_cta,
+        }
+
     # ---- AI enrichment panel (sets MAPLEAD_AI_CFG in session_state) ----
     with st.expander("🤖 AI enrichment (optional)", expanded=False):
         from provider_detect import detect_provider, mask_key
@@ -639,13 +719,17 @@ if page == PAGE_SCRAPE:
                         # Run enrichment (AI if working, else heuristic-only)
                         if _ai_enabled and ai_works and _ai_ops:
                             try:
-                                from ai_messages import enrich_leads_with_messages
+                                from ai_messages import enrich_leads_with_messages, UserConfig
+                                _msg_cfg = UserConfig(
+                                    **st.session_state.get("MAPLEAD_MSG_CFG", {}) or {}
+                                )
                                 total_biz = len(result.business_list)
                                 # Use the new per-lead message engine for full uniqueness
                                 enrich_leads_with_messages(
                                     result.business_list,
                                     ai=ai_instance,
-                                    channel="email",
+                                    channel=_msg_cfg.primary_channel,
+                                    config=_msg_cfg,
                                 )
                                 for i in range(total_biz):
                                     await update(total_biz + i + 1, total_biz * 2)
@@ -655,8 +739,13 @@ if page == PAGE_SCRAPE:
                         else:
                             # Even without AI, generate unique template messages
                             try:
-                                from ai_messages import enrich_leads_with_messages
-                                enrich_leads_with_messages(result.business_list, ai=None)
+                                from ai_messages import enrich_leads_with_messages, UserConfig
+                                _msg_cfg2 = UserConfig(
+                                    **st.session_state.get("MAPLEAD_MSG_CFG", {}) or {}
+                                )
+                                enrich_leads_with_messages(
+                                    result.business_list, ai=None, config=_msg_cfg2,
+                                )
                             except Exception as exc:
                                 logger.warning("Template message fill failed: %s", exc)
 
@@ -1478,6 +1567,7 @@ elif page == PAGE_CRM:
         else:
             st.markdown("### 📋 Results")
             import pandas as pd
+            from features import whatsapp_url, format_phone_in
             rows = []
             for l in leads:
                 phone_fmt = format_phone_in(l.phone)
