@@ -17,6 +17,99 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scraper import Business, BusinessList, parse_rating, parse_review_count  # noqa: E402
 from utils import _rows, compute_stats, export_csv, export_json  # noqa: E402
+from scorer import heuristic_score, score_batch, TIER_EMOJI  # noqa: E402
+
+
+# ---------------------------------------------------------------------------
+# Heuristic scorer
+# ---------------------------------------------------------------------------
+
+
+def test_heuristic_score_minimal_business():
+    """A business with nothing but a name scores 0 -> skip."""
+    biz = Business(name="Lonely Cafe")
+    s = heuristic_score(biz)
+    assert s.score == 0
+    assert s.tier == "skip"
+
+
+def test_heuristic_score_full_business_hot():
+    """A fully-populated business is hot."""
+    biz = Business(
+        name="Good Cafe",
+        phone_number="+91 22 1234 5678",
+        website="https://good.cafe",
+        reviews_average=4.5,
+        reviews_count=200,
+        latitude=19.0, longitude=72.8,
+        address="123 Main St, Mumbai, MH 400001",
+    )
+    s = heuristic_score(biz)
+    assert s.score >= 8
+    assert s.tier == "hot"
+
+
+def test_heuristic_score_warm():
+    """A business with 3 fields is warm, not hot."""
+    biz = Business(
+        name="OK Cafe",
+        phone_number="9876543210",
+        website="https://ok.cafe",
+        reviews_average=4.2,
+    )
+    s = heuristic_score(biz)
+    assert 5 <= s.score <= 7
+    assert s.tier == "warm"
+
+
+def test_heuristic_score_closed_zero():
+    """Permanently closed businesses score 0."""
+    biz = Business(name="Gone Cafe", phone_number="+91...", reviews_average=4.5, is_closed=True)
+    s = heuristic_score(biz)
+    assert s.score == 0
+    assert s.tier == "skip"
+    assert "CLOSED" in s.reason
+
+
+def test_heuristic_score_closed_in_name_penalty():
+    """Name containing 'closed' is penalized."""
+    biz = Business(name="Permanently Closed Diner", phone_number="1234567890")
+    s = heuristic_score(biz)
+    assert s.score <= 3  # base 2 for phone minus 3 penalty = -1 -> clamped to 0, but phone still counts
+
+
+def test_heuristic_score_partial_phone():
+    """Partial phone is worth less than full phone."""
+    biz_full = Business(name="A", phone_number="+919876543210")  # 12 digits
+    biz_partial = Business(name="A", phone_number="98765")      # 5 digits
+    assert heuristic_score(biz_full).score > heuristic_score(biz_partial).score
+
+
+def test_heuristic_score_many_reviews_bonus():
+    """High review counts (>50) get a bonus."""
+    biz_low = Business(name="A", reviews_count=10)
+    biz_high = Business(name="A", reviews_count=500)
+    assert heuristic_score(biz_high).score > heuristic_score(biz_low).score
+
+
+def test_score_batch_sorted_by_score():
+    """score_batch returns leads sorted hot -> cold."""
+    bizs = [
+        Business(name="Cold", phone_number="1234567890"),
+        Business(name="Hot", phone_number="1234567890", website="https://x.com", reviews_average=4.5, reviews_count=200, address="1 Main St, City, State 12345"),
+        Business(name="Warm", phone_number="1234567890", website="https://x.com", reviews_average=4.0),
+    ]
+    ranked = score_batch(bizs)
+    names = [b.name for b, _ in ranked]
+    assert names[0] == "Hot"
+    assert names[-1] == "Cold"
+
+
+def test_tier_emoji_has_all_tiers():
+    """All four tiers have emoji."""
+    for t in ("hot", "warm", "cold", "skip"):
+        assert t in TIER_EMOJI
+        assert TIER_EMOJI[t]  # non-empty
 
 
 # ---------------------------------------------------------------------------
