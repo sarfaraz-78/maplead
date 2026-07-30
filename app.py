@@ -901,25 +901,29 @@ if page == PAGE_SCRAPE:
         if _ai_status:
             if _ai_status.get("succeeded"):
                 st.success(
-                    f"✅ AI active — **{_ai_status.get('provider','')}** "
+                    f"🤖 **AI active** — {_ai_status.get('provider','')} "
                     f"({_ai_status.get('model','?')}) "
-                    f"scored {_ai_status.get('n_businesses', 0)} leads"
+                    f"generated unique messages for {_ai_status.get('n_businesses', 0)} leads"
                 )
             elif _ai_status.get("attempted") and _ai_status.get("error"):
+                _err = _ai_status.get('error', '')[:180]
                 st.warning(
-                    f"⚠️ AI call failed: **{_ai_status['error'][:150]}** — "
-                    f"showing heuristic scores instead. "
-                    f"Get a working key at https://openrouter.ai/keys"
+                    f"⚠️ **AI call failed** — `{_err}`\n\n"
+                    f"**Falling back to template messages** (these ARE being generated — "
+                    f"scroll down to **✉️ Unique Outreach Messages** section below to see them).\n\n"
+                    f"**To enable real AI:** get a working key at https://openrouter.ai/keys "
+                    f"(free, takes 30 seconds, no card needed)."
                 )
             elif _ai_status.get("configured") and not _ai_status.get("attempted"):
                 st.info(
-                    "🧮 AI enabled but no operations selected (default: score only). "
-                    "Showing heuristic scores."
+                    "🧮 AI enabled but no operations selected. "
+                    "Showing heuristic scores + template messages below."
                 )
             else:
                 st.info(
-                    "🧮 No AI key set. Showing heuristic scores (always works). "
-                    "Add a key in 🤖 AI enrichment to enable AI scoring + outreach."
+                    "📝 **Showing template messages** (no AI key set). "
+                    "Scroll down to see the unique per-lead messages below. "
+                    "Add an OpenRouter key in 🤖 AI enrichment for AI-rewritten messages."
                 )
 
         # Charts
@@ -984,6 +988,82 @@ if page == PAGE_SCRAPE:
                     "is_closed": None,
                 },
             )
+
+            # ---- Per-lead message preview -----------------------------------
+            st.markdown(f"##### ✉️ Unique Outreach Messages — {len(filtered)} leads")
+            st.caption(
+                "Each lead gets a unique message based on their actual data. "
+                "Click any row to expand the full multi-channel set."
+            )
+            for i, biz in enumerate(filtered[:50], start=1):  # cap at 50 for perf
+                tier_emoji = {"hot": "🔥", "warm": "🟡", "cold": "🔵", "skip": "⚫"}.get(biz.ai_tier or "skip", "⚫")
+                source_tag = biz.ai_messages_source or "template"
+                source_label = "🤖 AI" if source_tag == "ai" else "📝 Template"
+                with st.expander(
+                    f"{tier_emoji} {biz.name or '(no name)'}  •  {biz.ai_angle_id or '—'}  •  {source_label}",
+                    expanded=False,
+                ):
+                    mcol1, mcol2 = st.columns([3, 2])
+                    with mcol1:
+                        st.markdown("**📧 Subject line:**")
+                        st.code(biz.ai_subject or "(none)", language=None)
+                        if biz.ai_subject_b and biz.ai_subject_b != biz.ai_subject:
+                            st.caption(f"Alt A/B: {biz.ai_subject_b}")
+                        if biz.ai_subject_c and biz.ai_subject_c != biz.ai_subject:
+                            st.caption(f"Alt C: {biz.ai_subject_c}")
+
+                        st.markdown("**📧 Email body:**")
+                        st.text_area(
+                            "body",
+                            value=biz.ai_body_email or "(empty)",
+                            height=220,
+                            key=f"body_{biz.name}_{i}",
+                            label_visibility="collapsed",
+                        )
+
+                        st.markdown("**🔄 Follow-up sequence:**")
+                        for day, field_name in [(3, "ai_followup_day3"), (7, "ai_followup_day7"), (14, "ai_followup_day14")]:
+                            msg = getattr(biz, field_name, None)
+                            if msg:
+                                st.markdown(f"*Day {day}:*")
+                                st.text_area(
+                                    f"d{day}",
+                                    value=msg,
+                                    height=110,
+                                    key=f"{field_name}_{biz.name}_{i}",
+                                    label_visibility="collapsed",
+                                )
+
+                    with mcol2:
+                        st.markdown("**💬 WhatsApp:**")
+                        st.text_area(
+                            "wa",
+                            value=biz.ai_whatsapp or "(empty)",
+                            height=80,
+                            key=f"wa_{biz.name}_{i}",
+                            label_visibility="collapsed",
+                        )
+
+                        st.markdown("**📱 SMS:**")
+                        st.text_area(
+                            "sms",
+                            value=biz.ai_sms or "(empty)",
+                            height=60,
+                            key=f"sms_{biz.name}_{i}",
+                            label_visibility="collapsed",
+                        )
+
+                        st.markdown("**☎️ Call script:**")
+                        st.text_area(
+                            "call",
+                            value=biz.ai_call_script or "(empty)",
+                            height=260,
+                            key=f"call_{biz.name}_{i}",
+                            label_visibility="collapsed",
+                        )
+
+                        st.markdown("**🏷️ Tag:**")
+                        st.code(biz.ai_category or "(none)", language=None)
 
             # Downloads
             st.markdown("##### 📥 Download")
