@@ -647,13 +647,19 @@ if page == PAGE_SCRAPE:
                                 ai_err = f"{type(ai_exc).__name__}: {ai_exc}"
                                 logger.warning("AI enrichment failed: %s", ai_exc)
 
-                        # ALWAYS apply heuristic scoring (works without AI)
+                        # ALWAYS apply heuristic scoring + templated outreach + category
+                        # (works without any AI). AI augments these when available.
                         for biz in result.business_list:
+                            hs = heuristic_score(biz)
                             if biz.ai_score is None:
-                                hs = heuristic_score(biz)
                                 biz.ai_score = hs.score
                                 biz.ai_tier = hs.tier
                                 biz.ai_reason = hs.reason + ("  (heuristic)" if not ai_works else "")
+                            # Always ensure outreach + category are populated
+                            if not biz.ai_outreach:
+                                biz.ai_outreach = hs.outreach
+                            if not biz.ai_category:
+                                biz.ai_category = hs.category
 
                         # Save status for UI to display
                         st.session_state["LAST_AI_STATUS"] = {

@@ -38,9 +38,17 @@ class Score:
     score: int            # 0-10
     tier: str             # "hot" / "warm" / "cold" / "skip"
     reason: str           # one-liner why
+    outreach: str         # templated outreach msg (always populated)
+    category: str         # short tag (always populated)
 
     def to_dict(self) -> dict:
-        return {"score": self.score, "tier": self.tier, "reason": self.reason}
+        return {
+            "score": self.score,
+            "tier": self.tier,
+            "reason": self.reason,
+            "outreach": self.outreach,
+            "category": self.category,
+        }
 
 
 def heuristic_score(b: Business) -> Score:
@@ -50,7 +58,6 @@ def heuristic_score(b: Business) -> Score:
 
     # Phone (most important for outreach)
     if b.phone_number:
-        # Normalize and check length
         digits = "".join(c for c in b.phone_number if c.isdigit() or c == "+")
         if 8 <= len(digits) <= 15:
             score += 2
@@ -80,21 +87,20 @@ def heuristic_score(b: Business) -> Score:
     if b.reviews_count is not None and b.reviews_count >= 5:
         score += 1
         if b.reviews_count >= 50:
-            score += 0.5  # bonus for very popular
+            score += 0.5
             parts.append(f"reviews={b.reviews_count}")
         else:
             parts.append(f"reviews={b.reviews_count}")
     elif b.reviews_count is not None and b.reviews_count >= 1:
         score += 0.5
 
-    # Lat/Lon (we can map/mail to them)
+    # Lat/Lon
     if b.latitude is not None and b.longitude is not None:
         score += 1
         parts.append("coords")
 
-    # Address (full postal address helps with outreach)
+    # Address
     if b.address:
-        # Multi-part address = higher quality
         if "," in b.address and len(b.address) > 20:
             score += 1
             parts.append("full-address")
@@ -123,7 +129,96 @@ def heuristic_score(b: Business) -> Score:
         tier = "skip"
 
     reason = ", ".join(parts[:4]) if parts else "no usable data"
-    return Score(score=final, tier=tier, reason=reason)
+
+    # ---- Templated outreach (no LLM needed) ----
+    outreach = _template_outreach(b, tier)
+    category = _template_category(b)
+
+    return Score(score=final, tier=tier, reason=reason, outreach=outreach, category=category)
+
+
+def _template_outreach(b: Business, tier: str) -> str:
+    """Generate a templated outreach message from business fields.
+
+    No LLM needed - works offline, instantly, costs nothing.
+    Personalised enough to be usable as a starting point.
+    """
+    name = b.name or "your business"
+    cat = b.category or "local business"
+
+    # City from address (second-to-last comma-separated part usually)
+    city = "your area"
+    if b.address:
+        parts = [p.strip() for p in b.address.split(",")]
+        if len(parts) >= 2:
+            city = parts[-2]
+        elif len(parts) == 1:
+            city = parts[0]
+
+    # Opening varies by tier
+    openers = {
+        "hot": "Hi {name} team,",
+        "warm": "Hello {name},",
+        "cold": "Hi {name},",
+        "skip": "Hi {name},",
+    }
+
+    opener = openers.get(tier, "Hi {name},").format(name=name)
+
+    # Mention what we noticed (proof we did homework)
+    observations = []
+    if b.reviews_average and b.reviews_average >= 4.0:
+        observations.append(f"your strong {b.reviews_average:.1f}-star reputation")
+    if b.category and b.category.lower() not in ("unknown", ""):
+        observations.append(f"your work in {cat.lower()}")
+    if len(observations) == 0:
+        observations.append(f"your business")
+
+    # Mention a concrete offer
+    offer = (
+        "I work with similar {cat} businesses on practical improvements — "
+        "things like response times, customer follow-ups, or simple automation "
+        "that pays back within weeks."
+    ).format(cat=cat)
+
+    # Soft close
+    close = "Worth a quick 10-minute call this week?"
+
+    msg_parts = [opener, ""]
+    msg_parts.append(f"Came across {name} in {city} and was impressed by " + observations[0] + ".")
+    msg_parts.append("")
+    msg_parts.append(offer)
+    msg_parts.append("")
+    msg_parts.append(close)
+
+    return "\n".join(msg_parts).strip()
+
+
+def _template_category(b: Business) -> str:
+    """One-word category tag derived from existing category or name."""
+    if b.category:
+        return b.category.lower().replace(" ", "_")[:32]
+    if b.name:
+        n = b.name.lower()
+        # Common word-level hints
+        for kw, tag in [
+            ("cafe", "cafe"), ("coffee", "cafe"),
+            ("restaurant", "restaurant"), ("food", "restaurant"),
+            ("hotel", "hotel"), ("lodging", "hotel"),
+            ("gym", "gym"), ("fitness", "gym"),
+            ("school", "education"), ("academy", "education"),
+            ("hospital", "medical"), ("clinic", "medical"),
+            ("pharmacy", "pharmacy"), ("medical", "pharmacy"),
+            ("salon", "salon"), ("beauty", "salon"),
+            ("shop", "retail"), ("store", "retail"), ("mart", "retail"),
+            ("plumber", "plumber"), ("electric", "electrician"),
+            ("auto", "auto"), ("motor", "auto"),
+            ("lawyer", "legal"), ("advocate", "legal"),
+            ("bank", "finance"), ("finan", "finance"),
+        ]:
+            if kw in n:
+                return tag
+    return "other"
 
 
 def score_batch(businesses: list[Business]) -> list[tuple[Business, Score]]:

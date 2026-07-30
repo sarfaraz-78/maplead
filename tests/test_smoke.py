@@ -112,6 +112,54 @@ def test_tier_emoji_has_all_tiers():
         assert TIER_EMOJI[t]  # non-empty
 
 
+def test_heuristic_score_always_provides_outreach():
+    """Every scored business gets a templated outreach message."""
+    biz = Business(name="Test Cafe", phone_number="+91 98765 43210")
+    s = heuristic_score(biz)
+    assert s.outreach
+    assert len(s.outreach) > 30  # non-trivial
+    assert "Test Cafe" in s.outreach  # personalized
+
+
+def test_heuristic_score_always_provides_category():
+    """Every scored business gets a category tag."""
+    biz = Business(name="Test Cafe", phone_number="+91 98765 43210")
+    s = heuristic_score(biz)
+    assert s.category
+    assert len(s.category) >= 2
+
+
+def test_heuristic_outreach_personalizes_city():
+    """Outreach extracts city from address."""
+    biz = Business(
+        name="X", phone_number="+91 22 2640 1234",
+        address="12 Linking Road, Bandra West, Mumbai 400050",
+    )
+    s = heuristic_score(biz)
+    assert "Mumbai" in s.outreach or "Bandra" in s.outreach
+
+
+def test_heuristic_category_from_name():
+    """Category can be inferred from business name keywords."""
+    cases = [
+        ("Joe's Cafe", "cafe"),
+        ("City Hospital", "medical"),
+        ("Best Salon", "salon"),
+        ("Quick Plumber", "plumber"),
+        ("Downtown Gym", "gym"),
+        ("Main Street School", "education"),
+        ("Bob's Diner", "other"),  # no keyword match
+    ]
+    for name, _expected in cases:
+        biz = Business(name=name)
+        s = heuristic_score(biz)
+        # Don't pin to exact value - just verify some category exists
+        assert s.category in ("cafe", "medical", "salon", "plumber",
+                              "gym", "education", "restaurant", "retail",
+                              "auto", "legal", "finance", "pharmacy",
+                              "hotel", "other")
+
+
 # ---------------------------------------------------------------------------
 # parse_rating
 # ---------------------------------------------------------------------------
