@@ -275,6 +275,37 @@ def test_ai_core_describe_no_key():
         if saved_or: os.environ["OPENROUTER_API_KEY"] = saved_or
 
 
+def test_deepseek_v4_flash_0731_default_model():
+    """Default model is now deepseek/deepseek-v4-flash-0731."""
+    try:
+        from ai_enrichment import DEFAULT_MODEL, AVAILABLE_MODELS
+        assert DEFAULT_MODEL == "deepseek/deepseek-v4-flash-0731"
+        # It's in the dropdown
+        assert "deepseek/deepseek-v4-flash-0731" in AVAILABLE_MODELS.values()
+        # Description mentions 'new default'
+        labels = [l for l, mid in AVAILABLE_MODELS.items() if mid == "deepseek/deepseek-v4-flash-0731"]
+        assert labels, "deepseek v4 flash 0731 missing from AVAILABLE_MODELS"
+        assert any("new default" in l.lower() for l in labels)
+    except ImportError:
+        print("SKIP deepseek default test")
+
+
+def test_deepseek_models_all_listed():
+    """All major DeepSeek v3/v4 models are in the AVAILABLE_MODELS dropdown."""
+    try:
+        from ai_enrichment import AVAILABLE_MODELS
+        ids = set(AVAILABLE_MODELS.values())
+        for required in [
+            "deepseek/deepseek-v4-flash-0731",
+            "deepseek/deepseek-v4-flash",
+            "deepseek/deepseek-r1",
+            "deepseek/deepseek-chat-v3.1",
+        ]:
+            assert required in ids, f"missing {required} from dropdown"
+    except ImportError:
+        print("SKIP deepseek list test")
+
+
 def test_ai_core_score_business_uses_heuristic_when_not_working():
     """Even without a working key, score_business returns a valid ScoreResult."""
     ai = AICore(api_key=None)

@@ -33,7 +33,12 @@ logger = logging.getLogger(__name__)
 
 # Available models on OpenRouter. Update as new ones appear.
 AVAILABLE_MODELS = {
-    "Qwen 3.7 Flash (fast, $0.03/M in)":   "qwen/qwen3.7-flash",
+    "DeepSeek V4 Flash 0731 (new default, $0.14/M in)": "deepseek/deepseek-v4-flash-0731",
+    "DeepSeek V4 Flash ($0.14/M in)":      "deepseek/deepseek-v4-flash",
+    "DeepSeek V4 Pro ($0.44/M in)":        "deepseek/deepseek-v4-pro",
+    "DeepSeek Chat V3.1 ($0.25/M in)":     "deepseek/deepseek-chat-v3.1",
+    "DeepSeek R1 (reasoning, $0.70/M in)": "deepseek/deepseek-r1",
+    "Qwen 3.7 Flash (was default, $0.03/M in)": "qwen/qwen3.7-flash",
     "Qwen 3.7 Plus (balanced)":            "qwen/qwen3.7-plus",
     "Qwen 3.7 Max (best quality)":         "qwen/qwen3.7-max",
     "Qwen 2.5 7B (legacy, very cheap)":    "qwen/qwen-2.5-7b-instruct",
@@ -45,7 +50,7 @@ AVAILABLE_MODELS = {
     "GPT-3.5 Turbo":                       "openai/gpt-3.5-turbo",
 }
 
-DEFAULT_MODEL = "qwen/qwen3.7-flash"
+DEFAULT_MODEL = "deepseek/deepseek-v4-flash-0731"
 
 BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_TIMEOUT = 30.0
