@@ -306,6 +306,41 @@ def test_deepseek_models_all_listed():
         print("SKIP deepseek list test")
 
 
+def test_deepseek_default_everywhere():
+    """Default AI model is deepseek/deepseek-v4-flash-0731 in all modules."""
+    # 1. ai_enrichment module
+    try:
+        from ai_enrichment import DEFAULT_MODEL as EM_DEFAULT
+        assert EM_DEFAULT == "deepseek/deepseek-v4-flash-0731", f"ai_enrichment default = {EM_DEFAULT}"
+    except ImportError:
+        pass
+
+    # 2. ai_core module - OpenRouter provider default
+    try:
+        import sys
+        sys.path.insert(0, '.')
+        from ai_core import PROVIDERS, detect_provider
+        # OpenRouter is the first provider; should default to v4-flash-0731
+        or_prov = next((p for p in PROVIDERS if p["key_prefixes"][0].startswith("sk-or")), None)
+        assert or_prov is not None, "OpenRouter not in PROVIDERS"
+        assert or_prov["default_model"] == "deepseek/deepseek-v4-flash-0731", (
+            f"OpenRouter default = {or_prov['default_model']}"
+        )
+    except (ImportError, StopIteration):
+        pass
+
+    # 3. ai.py POPULAR_MODELS should have DeepSeek V4 Flash 0731
+    try:
+        sys.path.insert(0, '.')
+        import ai
+        ids = [m.get("id") for m in ai.POPULAR_MODELS]
+        assert "deepseek/deepseek-v4-flash-0731" in ids, "ai.POPULAR_MODELS missing DeepSeek v4-flash-0731"
+        # And ai.DEFAULT_MODEL should match too
+        assert ai.DEFAULT_MODEL == "deepseek/deepseek-v4-flash-0731"
+    except ImportError:
+        pass
+
+
 def test_ai_core_score_business_uses_heuristic_when_not_working():
     """Even without a working key, score_business returns a valid ScoreResult."""
     ai = AICore(api_key=None)

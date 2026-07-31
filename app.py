@@ -2116,14 +2116,14 @@ elif page == PAGE_SETTINGS:
     st.markdown("**Quick presets:**")
     pc1, pc2, pc3 = st.columns(3)
     with pc1:
-        if st.button("🎯 OpenRouter (Claude 3.5 Sonnet)", use_container_width=True,
-                     help="Best quality for cold outreach drafting"):
+        if st.button("🎯 OpenRouter (DeepSeek V4 Flash 0731)", use_container_width=True,
+                     help="NEW DEFAULT — best value for bulk scoring + outreach drafting"):
             import os as _os
             st.session_state["MAPLEAD_OPENAI_BASE_URL"] = "https://openrouter.ai/api/v1"
-            st.session_state["MAPLEAD_OPENAI_MODEL"] = "anthropic/claude-3.5-sonnet"
+            st.session_state["MAPLEAD_OPENAI_MODEL"] = "deepseek/deepseek-v4-flash-0731"
             _os.environ["MAPLEAD_OPENAI_BASE_URL"] = "https://openrouter.ai/api/v1"
-            _os.environ["MAPLEAD_OPENAI_MODEL"] = "anthropic/claude-3.5-sonnet"
-            st.success("Preset applied")
+            _os.environ["MAPLEAD_OPENAI_MODEL"] = "deepseek/deepseek-v4-flash-0731"
+            st.success("DeepSeek V4 Flash 0731 preset applied")
             st.rerun()
     with pc2:
         if st.button("⚡ OpenRouter (GPT-4o mini)", use_container_width=True,
@@ -2260,10 +2260,16 @@ elif page == PAGE_SETTINGS:
                     placeholder="sk-or-v1-...",
                     help="Starts with sk-or-v1-. Will only be stored for this session.",
                 )
+                # Find default index — DeepSeek V4 Flash 0731 if available
+                _default_idx = 0
+                for _i, _m in enumerate(ai_mod.POPULAR_MODELS):
+                    if _m.get("id") == "deepseek/deepseek-v4-flash-0731":
+                        _default_idx = _i
+                        break
                 inline_model = st.selectbox(
                     "Model",
                     options=[m["id"] for m in ai_mod.POPULAR_MODELS],
-                    index=1,  # GPT-4o mini is sensible default
+                    index=_default_idx,
                     format_func=lambda x: next(
                         (f"{m['label']} (${m['input']}/${m['output']} per 1M)"
                          for m in ai_mod.POPULAR_MODELS if m["id"] == x),

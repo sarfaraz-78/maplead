@@ -58,7 +58,7 @@ PROVIDERS: list[dict[str, Any]] = [
         "key_prefixes": ("sk-or-v1-", "sk-or-"),
         "name": "OpenRouter",
         "base_url": "https://openrouter.ai/api/v1",
-        "default_model": "qwen/qwen3.7-flash",
+        "default_model": "deepseek/deepseek-v4-flash-0731",
         "extra_headers": {
             "HTTP-Referer": HTTP_REFERRER,
             "X-Title": APP_TITLE,

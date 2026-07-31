@@ -29,7 +29,7 @@ logger = logging.getLogger("maplead.ai")
 # Defaults \u2014 sensible for OpenRouter
 # ---------------------------------------------------------------------------
 DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
-DEFAULT_MODEL = "anthropic/claude-3.5-sonnet"
+DEFAULT_MODEL = "deepseek/deepseek-v4-flash-0731"
 
 # OpenRouter-recommended headers for attribution (helps with rate limits)
 OPENROUTER_HEADERS = {
@@ -97,6 +97,34 @@ POPULAR_MODELS: list[dict] = [
         "tier": "cheap",
         "input": 0.14,
         "output": 0.28,
+    },
+    {
+        "id": "deepseek/deepseek-v4-flash-0731",
+        "label": "DeepSeek V4 Flash 0731 (NEW DEFAULT, top quality)",
+        "tier": "top",
+        "input": 0.14,
+        "output": 0.28,
+    },
+    {
+        "id": "deepseek/deepseek-v4-pro",
+        "label": "DeepSeek V4 Pro (premium)",
+        "tier": "top",
+        "input": 0.44,
+        "output": 0.87,
+    },
+    {
+        "id": "deepseek/deepseek-r1",
+        "label": "DeepSeek R1 (reasoning model)",
+        "tier": "mid",
+        "input": 0.70,
+        "output": 2.50,
+    },
+    {
+        "id": "qwen/qwen3.7-flash",
+        "label": "Qwen 3.7 Flash (ultra budget)",
+        "tier": "cheap",
+        "input": 0.03,
+        "output": 0.13,
     },
 ]
 
