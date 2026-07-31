@@ -346,7 +346,75 @@ ANGLE_TEMPLATES: list[dict[str, Any]] = [
         ),
         "close": "Open to a quick conversation about how to multiply this?",
     },
-]
+    {
+        "id": "geography",
+        "subject_styles": [
+            "Quick local-discovery question for {name}",
+            "Are you the {cat} in {area}?",
+        ],
+        "opener": "Hi {name} team,",
+        "bridge": (
+            "I came across {name} in {city} on Google Maps. {obs}. "
+            "Always nice to see {cat} options in the area."
+        ),
+        "offer": (
+            "I work with {cat} businesses nearby on a few operational things — "
+            "typically a 14-day setup that gives measurable uplift."
+        ),
+        "close": "Should I send over a one-page summary?",
+    },
+    {
+        "id": "first_impression",
+        "subject_styles": [
+            "What caught my eye about {name}",
+            "Curious about {name} ({area})",
+        ],
+        "opener": "Hi {name},",
+        "bridge": (
+            "Three small things stood out about {name} when I first looked: "
+            "{obs}. That combination usually means the business has something specific going for it."
+        ),
+        "offer": (
+            "I help {cat} businesses like {name} make the most of those strengths — "
+            "typically through better follow-through on inbound interest."
+        ),
+        "close": "Curious what the next 12 months look like for {name}? Worth a quick chat?",
+    },
+    {
+        "id": "recommendation",
+        "subject_styles": [
+            "A {area} referral for {name}?",
+            "One specific idea for {name}",
+        ],
+        "opener": "Hi {name} team,",
+        "bridge": (
+            "I work with a small group of {cat} businesses in {city}, and {name} keeps coming up "
+            "as the kind of operation I should reach out to. Notes from my side: {obs}."
+        ),
+        "offer": (
+            "If you're open to it, I'd love to share a short playbook — "
+            "what other {cat} leads in {city} are doing to convert more of their inbound."
+        ),
+        "close": "Should I send the playbook, or jump on a 10-min call first?",
+    },
+    {
+        "id": "tactical_quick_win",
+        "subject_styles": [
+            "One fix I'd make on {name}'s listing today",
+            "Quick tactical note for {name}",
+        ],
+        "opener": "Hi {name},",
+        "bridge": (
+            "Spent a few minutes looking at {name}'s public presence — {obs}. "
+            "There's one specific tactical change I'd test in the next 7 days."
+        ),
+        "offer": (
+            "Quick send of a before/after mockup so you can decide whether it's worth a "
+            "30-minute chat about implementing it."
+        ),
+        "close": "Want me to send the mockup first, or set up a call?",
+    },
+]  # 16 angles
 
 
 # ---------------------------------------------------------------------------
@@ -377,11 +445,11 @@ def _pick_angle_for(
     # Bias by tone: shuffle angle preferences
     tone = (cfg.tone if cfg else "friendly") or "friendly"
     tone_angles = {
-        "formal":       ["authority", "local_expert", "pain_point", "growth", "time_sensitive", "reputation", "volume", "compliment_close", "direct_value", "curiosity", "mutual_benefit", "missed_call"],
-        "friendly":     ["reputation", "compliment_close", "curiosity", "local_expert", "growth", "volume", "mutual_benefit", "authority", "pain_point", "direct_value", "time_sensitive", "missed_call"],
-        "direct":       ["direct_value", "time_sensitive", "missed_call", "pain_point", "growth", "authority", "mutual_benefit", "local_expert", "reputation", "volume", "curiosity", "compliment_close"],
-        "storytelling": ["curiosity", "mutual_benefit", "volume", "reputation", "compliment_close", "local_expert", "growth", "authority", "pain_point", "direct_value", "time_sensitive", "missed_call"],
-        "curious":      ["growth", "pain_point", "curiosity", "time_sensitive", "mutual_benefit", "authority", "local_expert", "reputation", "volume", "compliment_close", "direct_value", "missed_call"],
+        "formal":       ["authority", "local_expert", "pain_point", "growth", "time_sensitive", "reputation", "volume", "compliment_close", "direct_value", "curiosity", "mutual_benefit", "missed_call", "geography", "first_impression", "recommendation", "tactical_quick_win"],
+        "friendly":     ["reputation", "compliment_close", "curiosity", "local_expert", "growth", "volume", "first_impression", "geography", "recommendation", "mutual_benefit", "authority", "pain_point", "direct_value", "time_sensitive", "missed_call", "tactical_quick_win"],
+        "direct":       ["direct_value", "time_sensitive", "missed_call", "tactical_quick_win", "pain_point", "growth", "authority", "mutual_benefit", "local_expert", "reputation", "volume", "curiosity", "compliment_close", "first_impression", "geography", "recommendation"],
+        "storytelling": ["first_impression", "curiosity", "mutual_benefit", "reputation", "compliment_close", "local_expert", "growth", "authority", "pain_point", "direct_value", "time_sensitive", "missed_call", "geography", "recommendation", "volume", "tactical_quick_win"],
+        "curious":      ["growth", "pain_point", "curiosity", "time_sensitive", "first_impression", "mutual_benefit", "authority", "local_expert", "reputation", "volume", "compliment_close", "direct_value", "tactical_quick_win", "missed_call", "geography", "recommendation"],
     }
     ordered = tone_angles.get(tone, [a["id"] for a in ANGLE_TEMPLATES])
     # Pick the angle whose index in the ordered list matches hash % len
@@ -402,10 +470,11 @@ def _local_obs(biz: Business) -> str:
     return ""  # Could pull from reviews_text if available
 
 
-def _fill(template: str, biz: Business, cat: str, city: str, area: str, cfg: UserConfig | None = None) -> str:
+def _fill(template: str, biz: Business, cat: str, city: str, area: str, cfg: UserConfig | None = None, obs: str = "") -> str:
     """Replace placeholders in a template with safe string fallbacks.
 
-    Adds `{sender_name}` substitution if a config is provided.
+    Adds `{sender_name}` and `{obs}` (per-business observations) substitution
+    if provided.
     """
     cfg = cfg or UserConfig()
     replacements = {
@@ -419,12 +488,13 @@ def _fill(template: str, biz: Business, cat: str, city: str, area: str, cfg: Use
         "website": biz.website or "your site",
         "sender_name": cfg.sender_name or "",
         "sender_company": cfg.sender_company or "",
+        "obs": obs,  # empty for templates that don't reference it
     }
     out = template
     for k, v in replacements.items():
         out = out.replace("{" + k + "}", str(v))
-    # Collapse any unfilled placeholders
-    out = re.sub(r"\{[a-z_]+\}", "", out).strip()
+    # Collapse any unfilled placeholders (except {obs} which we kept around)
+    out = re.sub(r"\{(?!obs\})[a-z_]+\}", "", out).strip()
     # Tidy double spaces
     out = re.sub(r"  +", " ", out)
     return out
@@ -489,18 +559,199 @@ def _local_area(biz: Business, city: str) -> str:
     return ""
 
 
+# ---------------------------------------------------------------------------
+# Per-business observer - generates lead-specific facts
+# ---------------------------------------------------------------------------
+# Each helper returns a SHORT, SPECIFIC observation about the business.
+# Multiple helpers are tried; first non-None wins.
+
+
+def _obs_from_name(name: str) -> Optional[str]:
+    """Detect keywords in the business name."""
+    if not name:
+        return None
+    n = name.lower().strip()
+    keywords = {
+        "24/7":      "operates 24/7",
+        "24x7":     "operates 24/7",
+        "express":   "express service",
+        "luxury":    "luxury positioning",
+        "premium":   "premium positioning",
+        "elite":     "elite positioning",
+        "budget":    "budget positioning",
+        "wholesale": "wholesale operations",
+        "retail":    "retail storefront",
+        "cafe":      "cafe",
+        "cafe ":     "cafe",
+        " bistro":   "bistro-style",
+        "pub ":      "pub-style",
+        "brewery":   "brewery operations",
+        "studio":    "studio setup",
+        "lab ":      "lab setup",
+        "clinic ":   "clinic",
+        " hospital": "hospital",
+        "hotel":     "hotel",
+        " resort":   "resort",
+        "academy":   "academy",
+        "school":    "school",
+        "tuition":   "tuition center",
+        "shop":      "shop",
+        "mart":      "mart",
+        "kitchen":   "kitchen",
+        "bakery":    "bakery",
+        "grill":     "grill",
+        "tiffin":    "tiffin service",
+        "dhaba":     "dhaba",
+        "spice ":    "spice-forward menu",
+        "veg ":      "vegetarian focus",
+        "pure veg":  "pure-veg menu",
+    }
+    for kw, label in keywords.items():
+        if kw in n:
+            return label
+    return None
+
+
+def _obs_from_phone(phone: str) -> Optional[str]:
+    if not phone:
+        return None
+    p = phone.strip()
+    if p.startswith("+91"):
+        return "Indian business number"
+    if p.startswith("+1"):
+        return "North American number"
+    if p.startswith("+44"):
+        return "UK number"
+    if p.startswith("+"):
+        return "international number"
+    digits = "".join(c for c in p if c.isdigit())
+    if 10 <= len(digits) <= 11:
+        return "10-digit direct number"
+    if len(digits) < 10:
+        return "short phone (may be incomplete)"
+    return None
+
+
+def _obs_from_website(website: str) -> Optional[str]:
+    if not website:
+        return "no website listed yet"
+    w = website.lower()
+    if "https://" in w:
+        secure = "with HTTPS"
+    elif "http://" in w:
+        secure = "with HTTP (consider upgrading to HTTPS)"
+    else:
+        secure = ""
+    if w.endswith(".in"):
+        tld = "Indian .in domain"
+    elif w.endswith(".com"):
+        tld = ".com domain"
+    elif w.endswith(".co"):
+        tld = ".co domain"
+    elif w.endswith(".org"):
+        tld = "non-profit .org"
+    else:
+        tld = ""
+    bits = [b for b in (secure, tld) if b]
+    if bits:
+        return f"website {', '.join(bits)}"
+    return "has a website"
+
+
+def _obs_from_rating(avg: Optional[float], count: Optional[int]) -> Optional[str]:
+    if avg is None and count is None:
+        return "no ratings yet — opportunity to build reputation"
+    if avg is not None and count is not None:
+        if count >= 500:
+            tier = f"{count}+ reviews"
+        elif count >= 100:
+            tier = f"{count} reviews"
+        elif count >= 20:
+            tier = f"{count} reviews"
+        else:
+            tier = f"{count} reviews"
+        if avg >= 4.7:
+            return f"top-tier {avg:.1f}-star rating across {tier}"
+        if avg >= 4.0:
+            return f"strong {avg:.1f}-star rating across {tier}"
+        if avg >= 3.0:
+            return f"{avg:.1f}-star average across {tier} (room to grow)"
+        return f"{avg:.1f}-star — improvement opportunity"
+    if avg is not None:
+        return f"{avg:.1f}-star rating (only rating, no review count)"
+    return f"{count} reviews"
+
+
+def _obs_from_geo(latitude: Optional[float], longitude: Optional[float], biz: Business) -> Optional[str]:
+    if latitude is None or longitude is None:
+        return None
+    # Country-agnostic heuristics
+    if 6.0 <= latitude <= 36.0 and 68.0 <= longitude <= 97.0:
+        return "located in India"
+    if 24.0 <= latitude <= 49.0 and -125.0 <= longitude <= -67.0:
+        return "located in the US"
+    if 49.0 <= latitude <= 60.0 and -8.0 <= longitude <= 2.0:
+        return "located in the UK"
+    return "with verified map coordinates"
+
+
+def _observations_for(biz: Business) -> list[str]:
+    """Generate 2-4 lead-specific observations. Empty list if none fit."""
+    obs: list[str] = []
+    candidates = [
+        _obs_from_name(biz.name or ""),
+        _obs_from_phone(biz.phone_number or ""),
+        _obs_from_website(biz.website or ""),
+        _obs_from_rating(biz.reviews_average, biz.reviews_count),
+        _obs_from_geo(biz.latitude, biz.longitude, biz),
+    ]
+    for c in candidates:
+        if c and c not in obs:
+            obs.append(c)
+        if len(obs) >= 3:
+            break
+
+    # Bonus: address hint
+    if biz.address and len(obs) < 4:
+        if "tower" in biz.address.lower():
+            obs.append("in a tower / commercial building")
+        elif "mall" in biz.address.lower():
+            obs.append("located in a mall")
+        elif "plot" in biz.address.lower():
+            obs.append("on a plot / industrial site")
+
+    return obs[:4]
+
+
+def _format_observations(obs: list[str]) -> str:
+    """Render observations as a comma-separated natural phrase."""
+    if not obs:
+        return ""
+    if len(obs) == 1:
+        return obs[0]
+    if len(obs) == 2:
+        return f"{obs[0]} and {obs[1]}"
+    return ", ".join(obs[:-1]) + f", and {obs[-1]}"
+
+
 def _templated_messages(
     biz: Business, cfg: UserConfig | None = None
 ) -> LeadMessages:
     """Generate all message variants from templates (no LLM needed).
 
-    Honors cfg for tone overrides, custom offer/CTA, sender name/company.
+    Honors cfg for tone overrides, custom offer/CTA, sender name/company,
+    and weaves in 2-4 lead-specific observations (name keywords, phone
+    origin, website status, rating tier, geolocation).
     """
     cfg = cfg or UserConfig()
     cat = _guess_category(biz.name, biz.category)
     cat_nice = cat.replace("_", " ")
     city = _extract_city(biz.address)
     area = _local_area(biz, city)
+
+    # Generate lead-specific observations ONCE - reused in all variants
+    obs_list = _observations_for(biz)
+    obs = _format_observations(obs_list)
 
     # Apply tone modifiers to the angle picker
     angle = _pick_angle_for(biz, cfg)
@@ -509,30 +760,30 @@ def _templated_messages(
     company = cfg.sender_company or ""
 
     # Fill the angle template (with sender substitutions)
-    subject = _fill(angle["subject_styles"][0], biz, cat_nice, city, area, cfg)
-    subject_b = _fill(angle["subject_styles"][-1], biz, cat_nice, city, area, cfg)
+    subject = _fill(angle["subject_styles"][0], biz, cat_nice, city, area, cfg, obs)
+    subject_b = _fill(angle["subject_styles"][-1], biz, cat_nice, city, area, cfg, obs)
     subject_c = (
-        _fill(angle["subject_styles"][0], biz, cat_nice, city, area, cfg) + " (2-min read)"
+        _fill(angle["subject_styles"][0], biz, cat_nice, city, area, cfg, obs) + " (2-min read)"
         if len(angle["subject_styles"]) == 1
-        else _fill(angle["subject_styles"][1] + " — 60s read", biz, cat_nice, city, area, cfg)
+        else _fill(angle["subject_styles"][1] + " — 60s read", biz, cat_nice, city, area, cfg, obs)
     )
 
-    opener = _fill(angle["opener"], biz, cat_nice, city, area, cfg)
-    bridge = _fill(angle["bridge"], biz, cat_nice, city, area, cfg)
+    opener = _fill(angle["opener"], biz, cat_nice, city, area, cfg, obs)
+    bridge = _fill(angle["bridge"], biz, cat_nice, city, area, cfg, obs)
 
     # Offer: custom overrides default
     if cfg.custom_offer:
         offer = cfg.custom_offer
     elif cfg.product_offer:
-        offer = _fill(cfg.product_offer, biz, cat_nice, city, area, cfg)
+        offer = _fill(cfg.product_offer, biz, cat_nice, city, area, cfg, obs)
     else:
-        offer = _fill(angle["offer"], biz, cat_nice, city, area, cfg)
+        offer = _fill(angle["offer"], biz, cat_nice, city, area, cfg, obs)
 
     # Close: custom CTA overrides default
     if cfg.custom_cta:
         close = cfg.custom_cta
     else:
-        close = _fill(angle["close"], biz, cat_nice, city, area, cfg)
+        close = _fill(angle["close"], biz, cat_nice, city, area, cfg, obs)
 
     # Tone-prefix for opener
     tone_prefix = {
@@ -570,7 +821,8 @@ def _templated_messages(
         + ".\n\n"
         f"[HOOK]\n"
         f"I'm calling {cat_nice} businesses in {city} — found {name} on Google Maps. "
-        f"You have a strong reputation and I had a quick observation.\n\n"
+        + (f"A few specifics: {obs}. " if obs else "")
+        + "I had a quick observation.\n\n"
         f"[PITCH]\n"
         f"{bridge[:280]}\n\n"
         f"[OFFER]\n"
@@ -580,7 +832,7 @@ def _templated_messages(
         f"When works for you?"
     )
 
-    # Follow-up sequence (different angles each time)
+    # Follow-up sequence
     sender_sig = sender if sender != "[your name]" else ""
     sig_line = f"\n\n— {sender_sig}" if sender_sig else ""
 
