@@ -79,7 +79,8 @@ class SourceInfo:
     backend: str
     created_at: str
     last_used_at: str
-    lead_count: int
+    last_scraped_at: Optional[str] = None   # alias used by CRM UI
+    lead_count: int = 0
 
 
 @dataclass
@@ -382,6 +383,9 @@ class LeadDB:
                 backend=r["backend"] or "",
                 created_at=r["created_at"],
                 last_used_at=r["last_used_at"],
+                # CRM UI aliases "last_scraped_at" to "last_used_at" since the
+                # sources table only tracks last-used (no separate scrape timestamp).
+                last_scraped_at=r["last_used_at"],
                 lead_count=count,
             ))
         return out

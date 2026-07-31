@@ -391,7 +391,7 @@ with st.sidebar:
         if st.button(
             f"🚀 Run \"{pack_name}\" campaign",
             type="primary",
-            use_container_width=True,
+            width='stretch',
             key="run_lead_pack",
         ):
             # Only set the activation flag here. Read the other widget values
@@ -463,14 +463,14 @@ if page == PAGE_SCRAPE:
         preset_cols = st.columns(min(3, len(preset_names)))
         for i, preset_name in enumerate(preset_names[:3]):
             with preset_cols[i]:
-                if st.button(preset_name, key=f"preset_top_{i}", use_container_width=True):
+                if st.button(preset_name, key=f"preset_top_{i}", width='stretch'):
                     new_cfg = apply_preset(db, preset_name)
                     st.session_state["MAPLEAD_MSG_CFG"] = new_cfg
                     st.success(f"✅ Loaded preset: {preset_name}")
                     st.rerun()
         if st.button("⋯ show more presets", key="preset_more"):
             for preset_name in preset_names[3:]:
-                if st.button(preset_name, key=f"preset_{preset_name}", use_container_width=True):
+                if st.button(preset_name, key=f"preset_{preset_name}", width='stretch'):
                     new_cfg = apply_preset(db, preset_name)
                     st.session_state["MAPLEAD_MSG_CFG"] = new_cfg
                     st.success(f"✅ Loaded preset: {preset_name}")
@@ -547,12 +547,12 @@ if page == PAGE_SCRAPE:
         col_save, col_reset = st.columns(2)
         with col_save:
             save_clicked = st.button(
-                "💾 Save to DB", type="primary", use_container_width=True,
+                "💾 Save to DB", type="primary", width='stretch',
                 help="Persist all customizations across browser sessions",
             )
         with col_reset:
             reset_clicked = st.button(
-                "🔄 Reset to defaults", use_container_width=True,
+                "🔄 Reset to defaults", width='stretch',
             )
 
         # Capture all values into session state immediately (autosaves on rerun)
@@ -623,7 +623,7 @@ if page == PAGE_SCRAPE:
         elif _ai_enable:
             st.warning("Enable needs an API key")
 
-    run = st.button("🚀 Get Leads", type="primary", use_container_width=True)
+    run = st.button("🚀 Get Leads", type="primary", width='stretch')
 
 
     # ---------------------------------------------------------------------------
@@ -1099,7 +1099,7 @@ if page == PAGE_SCRAPE:
             display_df = pd.DataFrame([b.to_dict() for b in filtered])
             st.dataframe(
                 display_df,
-                use_container_width=True,
+                width='stretch',
                 height=420,
                 column_config={
                     "name": st.column_config.TextColumn("Name", width="medium"),
@@ -1223,7 +1223,7 @@ if page == PAGE_SCRAPE:
                     data=export_excel(filtered),
                     file_name=make_filename(fname_query, fname_backend, fname_pack, "xlsx", fname_count),
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True,
+                    width='stretch',
                 )
             with d2:
                 st.download_button(
@@ -1231,7 +1231,7 @@ if page == PAGE_SCRAPE:
                     data=export_csv(filtered),
                     file_name=make_filename(fname_query, fname_backend, fname_pack, "csv", fname_count),
                     mime="text/csv",
-                    use_container_width=True,
+                    width='stretch',
                 )
             with d3:
                 st.download_button(
@@ -1239,7 +1239,7 @@ if page == PAGE_SCRAPE:
                     data=export_json(filtered),
                     file_name=make_filename(fname_query, fname_backend, fname_pack, "json", fname_count),
                     mime="application/json",
-                    use_container_width=True,
+                    width='stretch',
                 )
 
             # New: phone-only and vCard for cold outreach
@@ -1255,7 +1255,7 @@ if page == PAGE_SCRAPE:
                         data=export_phones_csv(phones),
                         file_name=make_filename(fname_query, fname_backend, fname_pack, "phones.csv", len(phones)),
                         mime="text/csv",
-                        use_container_width=True,
+                        width='stretch',
                         help="Just Name + Phone + click-to-call link. Drop into your calling sheet.",
                     )
                 with p2:
@@ -1264,7 +1264,7 @@ if page == PAGE_SCRAPE:
                         data=export_vcard(phones),
                         file_name=make_filename(fname_query, fname_backend, fname_pack, "vcf", len(phones)),
                         mime="text/vcard",
-                        use_container_width=True,
+                        width='stretch',
                         help="Import directly into phone contacts / WhatsApp / Truecaller.",
                     )
 
@@ -1276,7 +1276,7 @@ if page == PAGE_SCRAPE:
                     data=export_excel_by_source(filtered),
                     file_name=make_filename("", fname_backend, fname_pack, "xlsx", fname_count),
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True,
+                    width='stretch',
                     help="One sheet per search query that produced leads in this pack, plus an 'All leads' summary sheet.",
                 )
         else:
@@ -1422,11 +1422,11 @@ elif page == PAGE_CRM:
                     wa_link = f"https://wa.me/{digits.replace('+','')}"
                     st.markdown(f"[💬 WhatsApp]({wa_link})  •  [📞 Call](tel:{digits})")
             with tc4:
-                if st.button("✅ Log contact", key=f"logged_{task['id']}", use_container_width=True):
+                if st.button("✅ Log contact", key=f"logged_{task['id']}", width='stretch'):
                     crm_mod.quick_log_contact(db, task['id'], task['source'], "call")
                     st.rerun()
             with tc5:
-                if st.button("🚫 Skip", key=f"skip_{task['id']}", use_container_width=True):
+                if st.button("🚫 Skip", key=f"skip_{task['id']}", width='stretch'):
                     db.set_status(task['id'], "Lost", task['source'], note="Skipped from outreach list")
                     st.rerun()
 
@@ -1461,23 +1461,23 @@ elif page == PAGE_CRM:
                     st.code(lead.ai_whatsapp, language=None)
                 ca, cb, cc, cd = st.columns(4)
                 with ca:
-                    if st.button("📞 Log call", key=f"hc_{lead.id}_call", use_container_width=True):
+                    if st.button("📞 Log call", key=f"hc_{lead.id}_call", width='stretch'):
                         crm_mod.quick_log_contact(db, lead.id, lead.source, "call")
                         st.toast("Call logged")
                         st.rerun()
                 with cb:
-                    if st.button("📧 Log email", key=f"hc_{lead.id}_email", use_container_width=True):
+                    if st.button("📧 Log email", key=f"hc_{lead.id}_email", width='stretch'):
                         crm_mod.quick_log_contact(db, lead.id, lead.source, "email")
                         db.set_status(lead.id, "Contacted", lead.source)
                         st.toast("Email sent + marked Contacted")
                         st.rerun()
                 with cc:
-                    if st.button("📥 Move: Contacted", key=f"hc_{lead.id}_mc", use_container_width=True):
+                    if st.button("📥 Move: Contacted", key=f"hc_{lead.id}_mc", width='stretch'):
                         db.set_status(lead.id, "Contacted", lead.source)
                         st.toast("→ Contacted")
                         st.rerun()
                 with cd:
-                    if st.button("🏆 Won!", key=f"hc_{lead.id}_won", use_container_width=True):
+                    if st.button("🏆 Won!", key=f"hc_{lead.id}_won", width='stretch'):
                         db.set_status(lead.id, "Won", lead.source)
                         st.toast("🎉 Marked Won")
                         st.rerun()
@@ -1643,7 +1643,7 @@ elif page == PAGE_CRM:
             df = pd.DataFrame(rows)
             st.dataframe(
                 df,
-                use_container_width=True,
+                width='stretch',
                 hide_index=True,
                 column_config={
                     "id": None,
@@ -1658,7 +1658,7 @@ elif page == PAGE_CRM:
                 if bulk_status != "(choose)":
                     if st.button(
                         f"Apply '{bulk_status}' to all {len(leads)} shown",
-                        use_container_width=True,
+                        width='stretch',
                         key="btn_apply_bulk",
                     ):
                         if is_all:
@@ -1679,7 +1679,7 @@ elif page == PAGE_CRM:
                 if st.button(
                     f"🗑 Delete {len(leads)} shown leads",
                     type="secondary",
-                    use_container_width=True,
+                    width='stretch',
                     key="btn_delete_shown",
                 ):
                     if is_all:
@@ -1757,7 +1757,7 @@ elif page == PAGE_CRM:
                         city = lead.source.split(" in ")[-1] if " in " in lead.source else "your city"
                         with ac1:
                             if st.button("📊 Score", key=f"ai_score_{lead.source}_{lead.id}",
-                                         use_container_width=True):
+                                         width='stretch'):
                                 with st.spinner("Scoring…"):
                                     s = ai_mod.score_lead(ai_biz)
                                 # Persist
@@ -1768,20 +1768,20 @@ elif page == PAGE_CRM:
                                 st.rerun()
                         with ac2:
                             if st.button("💬 WhatsApp (3 variants)", key=f"ai_var_{lead.source}_{lead.id}",
-                                         use_container_width=True):
+                                         width='stretch'):
                                 with st.spinner("Drafting 3 variants…"):
                                     variants = ai_mod.generate_variants(ai_biz, "whatsapp", city)
                                 for i, v in enumerate(variants, 1):
                                     st.markdown(f"**Variant {i}** ({v.get('angle','?')}):\n\n> {v.get('message','')}")
                         with ac3:
                             if st.button("📧 Email", key=f"ai_email_{lead.source}_{lead.id}",
-                                         use_container_width=True):
+                                         width='stretch'):
                                 with st.spinner("Drafting email…"):
                                     email = ai_mod.generate_email(ai_biz, city)
                                 st.code(email)
                         with ac4:
                             if st.button("🎯 Qualify", key=f"ai_qual_{lead.source}_{lead.id}",
-                                         use_container_width=True):
+                                         width='stretch'):
                                 with st.spinner("Qualifying…"):
                                     qual = ai_mod.qualify_lead(ai_biz, city)
                                 if "score" in qual:
@@ -1795,13 +1795,13 @@ elif page == PAGE_CRM:
                         rc1, rc2 = st.columns(2)
                         with rc1:
                             if st.button("📞 Cold call script", key=f"ai_cc_{lead.source}_{lead.id}",
-                                         use_container_width=True):
+                                         width='stretch'):
                                 with st.spinner("Drafting…"):
                                     script = ai_mod.generate_cold_call_script(ai_biz, city)
                                 st.code(script)
                         with rc2:
                             if st.button("🔍 Research", key=f"ai_re_{lead.source}_{lead.id}",
-                                         use_container_width=True):
+                                         width='stretch'):
                                 with st.spinner("Researching…"):
                                     research = ai_mod.research_lead(ai_biz)
                                 if research:
@@ -1841,7 +1841,7 @@ elif page == PAGE_CRM:
                 data=csv,
                 file_name=fn,
                 mime="text/csv",
-                use_container_width=True,
+                width='stretch',
                 key="btn_export_csv",
             )
         with col2:
@@ -1851,7 +1851,7 @@ elif page == PAGE_CRM:
                 data=stats_bytes,
                 file_name=f"maplead_stats_{datetime.now().strftime('%Y-%m-%d')}.json",
                 mime="application/json",
-                use_container_width=True,
+                width='stretch',
                 key="btn_export_stats",
             )
 
@@ -1887,7 +1887,7 @@ elif page == PAGE_DB:
                 "Created": s.created_at or "—",
                 "Last scrape": s.last_scraped_at or "—",
             })
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(rows), width='stretch', hide_index=True)
 
         # Per-source details
         st.markdown("### 📂 View Source Details")
@@ -1906,7 +1906,7 @@ elif page == PAGE_DB:
                     "Reviews": l.reviews_count,
                     "Category": l.category,
                 } for l in leads])
-                st.dataframe(df, use_container_width=True, hide_index=True)
+                st.dataframe(df, width='stretch', hide_index=True)
 
                 # Bulk actions
                 st.markdown("### ⚡ Bulk Actions")
@@ -1975,7 +1975,7 @@ elif page == PAGE_STATS:
             }
             for x in sources
         ])
-        st.dataframe(df, use_container_width=True, hide_index=True)
+        st.dataframe(df, width='stretch', hide_index=True)
         st.bar_chart(df.set_index("Source")["Leads"])
     else:
         st.caption("No sources yet. Run a scrape to create the first one.")
@@ -1995,7 +1995,7 @@ elif page == PAGE_STATS:
             }
             for l in recent
         ])
-        st.dataframe(df, use_container_width=True, hide_index=True)
+        st.dataframe(df, width='stretch', hide_index=True)
     else:
         st.caption("No leads in the database yet.")
 
@@ -2028,20 +2028,20 @@ elif page == PAGE_SETTINGS:
         c1, c2 = st.columns(2)
         with c1:
             if st.button("Enable read-only (this session)",
-                         disabled=session_ro, use_container_width=True):
+                         disabled=session_ro, width='stretch'):
                 sec.set_read_only(True)
                 st.rerun()
             if st.button("Disable read-only (this session)",
-                         disabled=not session_ro, use_container_width=True):
+                         disabled=not session_ro, width='stretch'):
                 sec.set_read_only(False)
                 st.rerun()
         with c2:
             if persisted_ro:
-                if st.button("Clear persistent read-only", use_container_width=True):
+                if st.button("Clear persistent read-only", width='stretch'):
                     sec.set_read_only(False, persist=True)
                     st.rerun()
             else:
-                if st.button("Persist read-only across restarts", use_container_width=True):
+                if st.button("Persist read-only across restarts", width='stretch'):
                     sec.set_read_only(True, persist=True)
                     st.rerun()
 
@@ -2055,7 +2055,7 @@ elif page == PAGE_SETTINGS:
     )
     b1, b2 = st.columns([1, 3])
     with b1:
-        if st.button("📸 Create backup now", use_container_width=True):
+        if st.button("📸 Create backup now", width='stretch'):
             dest = sec.backup(label="manual")
             st.success(f"Saved to {dest.name}")
     with b2:
@@ -2063,7 +2063,7 @@ elif page == PAGE_SETTINGS:
         if backups:
             import pandas as pd
             df = pd.DataFrame(backups)
-            st.dataframe(df, use_container_width=True, hide_index=True)
+            st.dataframe(df, width='stretch', hide_index=True)
             # Restore dropdown
             with st.expander("↩️ Restore from backup", expanded=False):
                 options = {b["name"]: b["path"] for b in backups}
@@ -2087,7 +2087,7 @@ elif page == PAGE_SETTINGS:
         import pandas as pd
         df = pd.DataFrame(log)
         df = df[["occurred_at", "actor", "action", "source", "details"]]
-        st.dataframe(df, use_container_width=True, hide_index=True)
+        st.dataframe(df, width='stretch', hide_index=True)
     else:
         st.caption("No audit entries yet.")
 
@@ -2116,7 +2116,7 @@ elif page == PAGE_SETTINGS:
     st.markdown("**Quick presets:**")
     pc1, pc2, pc3 = st.columns(3)
     with pc1:
-        if st.button("🎯 OpenRouter (DeepSeek V4 Flash 0731)", use_container_width=True,
+        if st.button("🎯 OpenRouter (DeepSeek V4 Flash 0731)", width='stretch',
                      help="NEW DEFAULT — best value for bulk scoring + outreach drafting"):
             import os as _os
             st.session_state["MAPLEAD_OPENAI_BASE_URL"] = "https://openrouter.ai/api/v1"
@@ -2126,7 +2126,7 @@ elif page == PAGE_SETTINGS:
             st.success("DeepSeek V4 Flash 0731 preset applied")
             st.rerun()
     with pc2:
-        if st.button("⚡ OpenRouter (GPT-4o mini)", use_container_width=True,
+        if st.button("⚡ OpenRouter (GPT-4o mini)", width='stretch',
                      help="Best value for bulk scoring 1000s of leads"):
             import os as _os
             st.session_state["MAPLEAD_OPENAI_BASE_URL"] = "https://openrouter.ai/api/v1"
@@ -2136,7 +2136,7 @@ elif page == PAGE_SETTINGS:
             st.success("Preset applied")
             st.rerun()
     with pc3:
-        if st.button("🆓 OpenRouter (Llama 3.2 free)", use_container_width=True,
+        if st.button("🆓 OpenRouter (Llama 3.2 free)", width='stretch',
                      help="Free tier via OpenRouter — slower but no cost"):
             import os as _os
             st.session_state["MAPLEAD_OPENAI_BASE_URL"] = "https://openrouter.ai/api/v1"
@@ -2279,11 +2279,11 @@ elif page == PAGE_SETTINGS:
                 col_save, col_test = st.columns(2)
                 with col_save:
                     inline_submitted = st.form_submit_button(
-                        "💾 Save key & enable AI", type="primary", use_container_width=True,
+                        "💾 Save key & enable AI", type="primary", width='stretch',
                     )
                 with col_test:
                     inline_test = st.form_submit_button(
-                        "🔌 Test connection", use_container_width=True,
+                        "🔌 Test connection", width='stretch',
                     )
 
                 # Test connection without saving (so user can verify a key first)
@@ -2346,13 +2346,13 @@ elif page == PAGE_SETTINGS:
                                     help="e.g. 'restaurants', 'signage', 'jewellery shops'")
     col_btn1, col_btn2 = st.columns([3, 1])
     with col_btn1:
-        run_strat = st.button("✨ Suggest best queries", use_container_width=True,
+        run_strat = st.button("✨ Suggest best queries", width='stretch',
                               type="primary")
     with col_btn2:
         if not ai_mod.is_configured():
             st.link_button("🔑 Get key",
                            "https://openrouter.ai/keys",
-                           use_container_width=True,
+                           width='stretch',
                            help="Free OpenRouter account, no card needed")
     if run_strat:
         with st.spinner("Thinking…"):
@@ -2385,7 +2385,7 @@ elif page == PAGE_SETTINGS:
             address="Hitech City, Hyderabad", website="tancoffee.in",
         )
         city = "Hyderabad"
-        if st.button("Run AI on sample lead", use_container_width=True):
+        if st.button("Run AI on sample lead", width='stretch'):
             with st.spinner("Calling AI..."):
                 score = ai_mod.score_lead(sample)
                 wa = ai_mod.generate_whatsapp_message(sample, city)
