@@ -272,6 +272,16 @@ class LeadDB:
                 )
                 """
             )
+            # Persistent app settings (user profile + message defaults)
+            c.execute(
+                """
+                CREATE TABLE IF NOT EXISTS app_settings (
+                    key   TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
 
             # Migrate ALL existing leads_<slug> tables so CRM can show
             # multi-channel messages on leads from past scrapes too.
@@ -688,6 +698,58 @@ class LeadDB:
     def get_leads_to_score(self, source: str, limit: int = 100) -> list[Lead]:
         """Get leads that haven't been AI-scored yet (or all if you want re-scoring)."""
         return self.query(source=source, limit=limit)
+
+    # ---------- persistent settings (user profile + message defaults) ----------
+    def get_setting(self, key: str, default: str | None = None) -> str | None:
+        """Get a string-typed setting. Returns default if missing."""
+        with self._conn() as c:
+            row = c.execute("SELECT value FROM app_settings WHERE key=?", (key,)).fetchone()
+        return row["value"] if row else default
+
+    def get_setting_dict(self, prefix: str = "") -> dict[str, str]:
+        """Return all settings starting with prefix as a dict. 'msg_*' keys get prefix stripped."""
+        with self._conn() as c:
+            rows = c.execute("SELECT key, value FROM app_settings").fetchall()
+        out = {}
+        for r in rows:
+            k = r["key"]
+            if k.startswith(prefix):
+                stripped = k[len(prefix):] if prefix else k
+                out[stripped] = r["value"]
+        return out
+
+    def set_setting(self, key: str, value: str) -> None:
+        """Upsert a string setting."""
+        if value is None:
+            return
+        with self._conn() as c:
+            c.execute(
+                """INSERT INTO app_settings (key, value, updated_at)
+                   VALUES (?, ?, ?)
+                   ON CONFLICT(key) DO UPDATE SET
+                       value=excluded.value, updated_at=excluded.updated_at""",
+                (key, str(value), datetime.now().isoformat(timespec="seconds")),
+            )
+
+    def set_settings(self, items: dict[str, str], prefix: str = "") -> None:
+        """Upsert many settings at once. Prepends prefix to each key."""
+        with self._conn() as c:
+            now = datetime.now().isoformat(timespec="seconds")
+            for k, v in items.items():
+                if v is None:
+                    continue
+                key = prefix + k
+                c.execute(
+                    """INSERT INTO app_settings (key, value, updated_at)
+                       VALUES (?, ?, ?)
+                       ON CONFLICT(key) DO UPDATE SET
+                           value=excluded.value, updated_at=excluded.updated_at""",
+                    (key, str(v), now),
+                )
+
+    def delete_setting(self, key: str) -> None:
+        with self._conn() as c:
+            c.execute("DELETE FROM app_settings WHERE key=?", (key,))
 
     # ---------- contacts ----------
     def add_contact(self, lead_id: int, source: str, kind: str, summary: str = "") -> int:

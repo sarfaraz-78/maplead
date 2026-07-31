@@ -449,28 +449,56 @@ if page == PAGE_SCRAPE:
     # ---- Message customization panel (sets MAPLEAD_MSG_CFG in session_state) ----
     with st.expander("✏️ Customize my messages", expanded=False):
         from ai_messages import UserConfig
-        _mc_existing = st.session_state.get("MAPLEAD_MSG_CFG", {}) or {}
-        st.caption(
-            "These details appear inside the messages. Leave blank for neutral defaults. "
-            "Persisted across runs in your browser session."
+        from settings import (
+            DEFAULT_MSG_CFG, get_presets, apply_preset, save_msg_cfg, load_msg_cfg, reset_msg_cfg,
         )
+
+        # Auto-load from DB (overrides session_state so reloads restore)
+        db = get_db()
+        db_defaults = load_msg_cfg(db)
+
+        # Quick presets: one-click load an example
+        st.markdown("##### 🚀 Quick start")
+        preset_names = [name for name, _ in get_presets()]
+        preset_cols = st.columns(min(3, len(preset_names)))
+        for i, preset_name in enumerate(preset_names[:3]):
+            with preset_cols[i]:
+                if st.button(preset_name, key=f"preset_top_{i}", use_container_width=True):
+                    new_cfg = apply_preset(db, preset_name)
+                    st.session_state["MAPLEAD_MSG_CFG"] = new_cfg
+                    st.success(f"✅ Loaded preset: {preset_name}")
+                    st.rerun()
+        if st.button("⋯ show more presets", key="preset_more"):
+            for preset_name in preset_names[3:]:
+                if st.button(preset_name, key=f"preset_{preset_name}", use_container_width=True):
+                    new_cfg = apply_preset(db, preset_name)
+                    st.session_state["MAPLEAD_MSG_CFG"] = new_cfg
+                    st.success(f"✅ Loaded preset: {preset_name}")
+                    st.rerun()
+
+        # Merge: session_state overrides DB, DB overrides defaults
+        _mc_existing = dict(db_defaults)
+        _mc_existing.update(st.session_state.get("MAPLEAD_MSG_CFG", {}) or {})
+
+        st.caption("Auto-filled with sensible defaults. Edit anything — saves to DB permanently.")
+
         c1, c2 = st.columns(2)
         with c1:
             _sender_name = st.text_input(
                 "Your name",
-                value=_mc_existing.get("sender_name", ""),
+                value=_mc_existing.get("sender_name", DEFAULT_MSG_CFG["sender_name"]),
                 placeholder="e.g. Vikram",
                 help="Appears in message signatures",
             )
             _sender_company = st.text_input(
                 "Your company / brand",
-                value=_mc_existing.get("sender_company", ""),
+                value=_mc_existing.get("sender_company", DEFAULT_MSG_CFG["sender_company"]),
                 placeholder="e.g. QuickReply AI",
                 help="Optional. Mentioned in your intro and offers.",
             )
             _sender_role = st.text_input(
                 "Your role",
-                value=_mc_existing.get("sender_role", ""),
+                value=_mc_existing.get("sender_role", DEFAULT_MSG_CFG["sender_role"]),
                 placeholder="e.g. growth consultant",
             )
             _primary_channel = st.selectbox(
@@ -492,28 +520,42 @@ if page == PAGE_SCRAPE:
         with c2:
             _industry_context = st.text_area(
                 "What you do (1-2 sentences)",
-                value=_mc_existing.get("industry_context", ""),
+                value=_mc_existing.get("industry_context", DEFAULT_MSG_CFG["industry_context"]),
                 placeholder="e.g. We help local businesses automate WhatsApp replies.",
                 height=80,
                 help="Used in offer line",
             )
             _product_offer = st.text_area(
                 "Specific thing you're offering",
-                value=_mc_existing.get("product_offer", ""),
+                value=_mc_existing.get("product_offer", DEFAULT_MSG_CFG["product_offer"]),
                 placeholder="e.g. 14-day free trial, no card needed",
                 height=60,
             )
             _custom_offer = st.text_area(
-                "Custom offer (overrides default)",
-                value=_mc_existing.get("custom_offer", ""),
+                "Custom offer (verbatim, overrides default)",
+                value=_mc_existing.get("custom_offer", DEFAULT_MSG_CFG["custom_offer"]),
                 placeholder="Sentences describing your offer verbatim",
                 height=60,
             )
             _custom_cta = st.text_input(
                 "Custom closing question",
-                value=_mc_existing.get("custom_cta", ""),
+                value=_mc_existing.get("custom_cta", DEFAULT_MSG_CFG["custom_cta"]),
                 placeholder="e.g. Got Tuesday at 3pm?",
             )
+
+        # Save button + reset
+        col_save, col_reset = st.columns(2)
+        with col_save:
+            save_clicked = st.button(
+                "💾 Save to DB", type="primary", use_container_width=True,
+                help="Persist all customizations across browser sessions",
+            )
+        with col_reset:
+            reset_clicked = st.button(
+                "🔄 Reset to defaults", use_container_width=True,
+            )
+
+        # Capture all values into session state immediately (autosaves on rerun)
         st.session_state["MAPLEAD_MSG_CFG"] = {
             "sender_name": _sender_name,
             "sender_company": _sender_company,
@@ -525,6 +567,15 @@ if page == PAGE_SCRAPE:
             "custom_offer": _custom_offer,
             "custom_cta": _custom_cta,
         }
+
+        if save_clicked:
+            save_msg_cfg(db, st.session_state["MAPLEAD_MSG_CFG"])
+            st.success("✅ Saved permanently to maplead.db")
+        if reset_clicked:
+            cfg = reset_msg_cfg(db)
+            st.session_state["MAPLEAD_MSG_CFG"] = cfg
+            st.success("🔄 Reset to defaults")
+            st.rerun()
 
     # ---- AI enrichment panel (sets MAPLEAD_AI_CFG in session_state) ----
     with st.expander("🤖 AI enrichment (optional)", expanded=False):
